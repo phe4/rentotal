@@ -1,0 +1,341 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PropertySourceType {
+  MANUAL
+  OFFICIAL_SITE
+  FLOORPLAN_URL
+  ZILLOW
+  APARTMENTS_COM
+  GOOGLE_MAPS
+  REDFIN
+  OTHER
+}
+
+enum WatchItemPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum WatchItemStatus {
+  WATCHING
+  CONTACTED
+  TOURED
+  APPLIED
+  REJECTED
+  ARCHIVED
+  LEASED
+}
+
+enum WatchIntakeInputType {
+  OFFICIAL_WEBSITE_URL
+  FLOORPLAN_URL
+  ZILLOW_URL
+  APARTMENTS_COM_URL
+  GOOGLE_MAPS_URL
+  PROPERTY_NAME
+  ADDRESS
+  FREE_TEXT
+}
+
+enum ParsedStatus {
+  PENDING
+  PARSED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum PriceParseStatus {
+  NOT_PARSED
+  PARSED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum ScrapeTaskType {
+  PRICE_CHECK
+  SOURCE_DISCOVERY
+  REVIEW_CHECK
+  SOCIAL_SEARCH
+  AI_EXTRACTION
+}
+
+enum ScrapeTaskStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum CrawlerTier {
+  API
+  HTTP
+  DIRECT_JSON
+  BROWSER
+  AI_EXTRACTION
+  MANUAL
+}
+
+enum ScrapeRunStatus {
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+enum AlertType {
+  PRICE_DROPPED
+  PRICE_INCREASED
+  NEW_SPECIAL_OFFER
+  SPECIAL_OFFER_CHANGED
+  BECAME_AVAILABLE
+  ENTERED_BUDGET
+  SCRAPE_FAILED
+  NEEDS_REVIEW
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum DocumentType {
+  REVIEW
+  SOCIAL_POST
+  OFFICIAL_SITE_TEXT
+  SPECIAL_OFFER_TEXT
+  AGENT_FINDING
+  LEASE_TERM
+  FAQ
+  SCRAPED_PAGE
+  USER_NOTE
+}
+
+model Property {
+  id              String           @id @default(cuid())
+  name            String
+  normalizedName  String
+  address         String?
+  city            String?
+  state           String?
+  zip             String?
+  lat             Float?
+  lng             Float?
+  officialWebsite String?
+  propertyType    String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  alerts          Alert[]
+  documents       Document[]
+  documentChunks  DocumentChunk[]
+  priceSnapshots  PriceSnapshot[]
+  scrapeRuns      ScrapeRun[]
+  scrapeTasks     ScrapeTask[]
+  sources         PropertySource[]
+  watchItems      WatchListItem[]
+  watchIntakes    WatchIntake[]
+}
+
+model PropertySource {
+  id               String             @id @default(cuid())
+  propertyId       String
+  sourceType       PropertySourceType
+  sourceUrl        String?
+  sourceExternalId String?
+  isPrimary        Boolean            @default(false)
+  metadata         Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  priceSnapshots   PriceSnapshot[]
+  property         Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  scrapeRuns       ScrapeRun[]
+  scrapeTasks      ScrapeTask[]
+
+  @@index([propertyId])
+}
+
+model WatchList {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  items       WatchListItem[]
+}
+
+model WatchListItem {
+  id               String            @id @default(cuid())
+  watchListId      String
+  propertyId       String
+  targetBedrooms   Int?
+  targetBathrooms  Float?
+  targetMoveInDate DateTime?
+  targetBudgetMin  Int?
+  targetBudgetMax  Int?
+  priority         WatchItemPriority @default(MEDIUM)
+  notes            String?
+  status           WatchItemStatus   @default(WATCHING)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  alerts           Alert[]
+  property         Property          @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  watchList        WatchList         @relation(fields: [watchListId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+  @@index([watchListId])
+}
+
+model WatchIntake {
+  id                String               @id @default(cuid())
+  inputType         WatchIntakeInputType
+  inputValue        String
+  parsedStatus      ParsedStatus         @default(PENDING)
+  matchedPropertyId String?
+  errorMessage      String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  matchedProperty   Property?            @relation(fields: [matchedPropertyId], references: [id], onDelete: SetNull)
+
+  @@index([matchedPropertyId])
+}
+
+model PriceSnapshot {
+  id                 String           @id @default(cuid())
+  propertyId         String
+  sourceId           String?
+  floorplanName      String?
+  unitNumber         String?
+  bedrooms           Int?
+  bathrooms          Float?
+  sqft               Int?
+  baseRent           Int?
+  effectiveRent      Int?
+  leaseTermMonths    Int?
+  moveInDate         DateTime?
+  specialOfferText   String?
+  specialOfferValue  Int?
+  mandatoryFees      Int?
+  availabilityStatus String?
+  scrapedAt          DateTime?
+  rawData            Json?
+  parseStatus        PriceParseStatus @default(NOT_PARSED)
+  errorMessage       String?
+  createdAt          DateTime         @default(now())
+  property           Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  source             PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId, createdAt])
+  @@index([sourceId])
+}
+
+model ScrapeTask {
+  id           String           @id @default(cuid())
+  propertyId   String?
+  sourceId     String?
+  taskType     ScrapeTaskType
+  priority     WatchItemPriority @default(MEDIUM)
+  status       ScrapeTaskStatus  @default(PENDING)
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  retryCount   Int              @default(0)
+  maxRetries   Int              @default(3)
+  crawlerTier  CrawlerTier
+  errorMessage String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  runs         ScrapeRun[]
+  source       PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId])
+  @@index([sourceId])
+  @@index([status, scheduledAt])
+}
+
+model ScrapeRun {
+  id            String           @id @default(cuid())
+  taskId        String?
+  propertyId    String?
+  sourceId      String?
+  crawlerTier   CrawlerTier
+  status        ScrapeRunStatus
+  startedAt     DateTime
+  finishedAt    DateTime?
+  durationMs    Int?
+  httpStatus    Int?
+  contentHash   String?
+  itemsFound    Int?
+  rawStorageUrl String?
+  errorMessage  String?
+  createdAt     DateTime         @default(now())
+  property      Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  source        PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  task          ScrapeTask?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId])
+  @@index([sourceId])
+  @@index([taskId])
+}
+
+model Alert {
+  id              String         @id @default(cuid())
+  propertyId      String?
+  watchListItemId String?
+  alertType       AlertType
+  title           String
+  message         String
+  severity        AlertSeverity  @default(INFO)
+  isRead          Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  property        Property?      @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  watchListItem   WatchListItem? @relation(fields: [watchListItemId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId])
+  @@index([watchListItemId])
+  @@index([isRead, createdAt])
+}
+
+model Document {
+  id           String          @id @default(cuid())
+  propertyId   String?
+  sourceType   String
+  sourceUrl    String?
+  documentType DocumentType
+  title        String?
+  content      String
+  language     String?
+  collectedAt  DateTime?
+  metadata     Json?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  chunks       DocumentChunk[]
+  property     Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId])
+}
+
+model DocumentChunk {
+  id          String    @id @default(cuid())
+  documentId  String
+  propertyId  String?
+  chunkText   String
+  chunkIndex  Int
+  tokenCount  Int?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  document    Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  property    Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  // TODO: Add pgvector embedding columns in a future AI phase.
+
+  @@index([documentId, chunkIndex])
+  @@index([propertyId])
+}
