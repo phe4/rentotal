@@ -219,7 +219,7 @@ model PriceSnapshot {
   bathrooms          Float?
   sqft               Int?
   baseRent           Int?
-  effectiveRent      Int?
+  effectiveRent      Float?
   leaseTermMonths    Int?
   moveInDate         DateTime?
   specialOfferText   String?
@@ -239,7 +239,7 @@ model PriceSnapshot {
 }
 
 model ScrapeTask {
-  id           String           @id @default(cuid())
+  id           String            @id @default(cuid())
   propertyId   String?
   sourceId     String?
   taskType     ScrapeTaskType
@@ -248,15 +248,15 @@ model ScrapeTask {
   scheduledAt  DateTime?
   startedAt    DateTime?
   finishedAt   DateTime?
-  retryCount   Int              @default(0)
-  maxRetries   Int              @default(3)
+  retryCount   Int               @default(0)
+  maxRetries   Int               @default(3)
   crawlerTier  CrawlerTier
   errorMessage String?
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  property     Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  property     Property?         @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   runs         ScrapeRun[]
-  source       PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  source       PropertySource?   @relation(fields: [sourceId], references: [id], onDelete: SetNull)
 
   @@index([propertyId])
   @@index([sourceId])
@@ -264,7 +264,7 @@ model ScrapeTask {
 }
 
 model ScrapeRun {
-  id            String           @id @default(cuid())
+  id            String          @id @default(cuid())
   taskId        String?
   propertyId    String?
   sourceId      String?
@@ -278,10 +278,10 @@ model ScrapeRun {
   itemsFound    Int?
   rawStorageUrl String?
   errorMessage  String?
-  createdAt     DateTime         @default(now())
-  property      Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
-  source        PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
-  task          ScrapeTask?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  createdAt     DateTime        @default(now())
+  property      Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  source        PropertySource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  task          ScrapeTask?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
   rawPages      RawPage[]
 
   @@index([propertyId])
@@ -349,16 +349,16 @@ model Document {
 }
 
 model DocumentChunk {
-  id          String    @id @default(cuid())
-  documentId  String
-  propertyId  String?
-  chunkText   String
-  chunkIndex  Int
-  tokenCount  Int?
-  metadata    Json?
-  createdAt   DateTime  @default(now())
-  document    Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  property    Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  id         String    @id @default(cuid())
+  documentId String
+  propertyId String?
+  chunkText  String
+  chunkIndex Int
+  tokenCount Int?
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+  document   Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  property   Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   // TODO: Add pgvector embedding columns in a future AI phase.
 
   @@index([documentId, chunkIndex])

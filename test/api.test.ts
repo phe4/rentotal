@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { InMemoryRepository } from "../src/db/inMemoryRepository.js";
 import { genericHtmlRentParser } from "../src/parsers/genericHtmlRentParser.js";
+import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
+import type { PriceSnapshotRecord } from "../src/types.js";
 
 let repository: InMemoryRepository;
 let app: ReturnType<typeof createApp>;
@@ -284,6 +286,343 @@ describe("Phase 2 HTTP scraper API", () => {
 
     expect(detail.body.run.id).toBe(scrape.body.run.id);
     expect(detail.body.priceSnapshots).toHaveLength(1);
+  });
+});
+
+describe("Phase 3 price snapshots and alerts", () => {
+  async function createSource(sourceUrl = "https://example.com/rent") {
+    const property = await request(app)
+      .post("/api/properties")
+      .send({ name: "Phase 3 Target" })
+      .expect(201);
+    const source = await request(app)
+      .post(`/api/properties/${property.body.id}/sources`)
+      .send({ sourceType: "OFFICIAL_SITE", sourceUrl })
+      .expect(201);
+    return { property: property.body, source: source.body };
+  }
+
+  async function createSnapshot(
+    propertyId: string,
+    sourceId: string,
+    data: Partial<PriceSnapshotRecord>,
+  ) {
+    return repository.createPriceSnapshot({
+      propertyId,
+      sourceId,
+      floorplanName: data.floorplanName ?? null,
+      unitNumber: data.unitNumber ?? null,
+      bedrooms: data.bedrooms ?? null,
+      bathrooms: data.bathrooms ?? null,
+      sqft: data.sqft ?? null,
+      baseRent: data.baseRent ?? null,
+      effectiveRent: data.effectiveRent ?? data.baseRent ?? null,
+      leaseTermMonths: data.leaseTermMonths ?? null,
+      moveInDate: data.moveInDate ?? null,
+      specialOfferText: data.specialOfferText ?? null,
+      specialOfferValue: data.specialOfferValue ?? null,
+      mandatoryFees: data.mandatoryFees ?? null,
+      availabilityStatus: data.availabilityStatus ?? null,
+      scrapedAt: data.scrapedAt ?? new Date(),
+      rawData: data.rawData ?? null,
+      parseStatus: "PARSED",
+      errorMessage: null,
+    });
+  }
+
+  it("calculates effective rent with base rent only", () => {
+    expect(calculateEffectiveRent({ baseRent: 2500 })).toBe(2500);
+  });
+
+  it("calculates effective rent with lease term and concession", () => {
+    expect(
+      calculateEffectiveRent({
+        baseRent: 2400,
+        leaseTermMonths: 12,
+        specialOfferValue: 2400,
+      }),
+    ).toBe(2200);
+  });
+
+  it("calculates effective rent with mandatory fees", () => {
+    expect(
+      calculateEffectiveRent({
+        baseRent: 2400,
+        leaseTermMonths: 12,
+        specialOfferValue: 1200,
+        mandatoryFees: 50,
+      }),
+    ).toBe(2350);
+  });
+
+  it("creates PRICE_DROPPED alert when effective rent decreases", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 3000,
+      effectiveRent: 3000,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=PRICE_DROPPED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+    expect(alerts.body[0].message).toContain("3000");
+    expect(alerts.body[0].message).toContain("2500");
+  });
+
+  it("creates PRICE_INCREASED alert when effective rent increases", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2400,
+      effectiveRent: 2400,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,700</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=PRICE_INCREASED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates NEW_SPECIAL_OFFER alert", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2500,
+      effectiveRent: 2500,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500 1 month free</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=NEW_SPECIAL_OFFER")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates SPECIAL_OFFER_CHANGED alert", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2500,
+      effectiveRent: 2500,
+      specialOfferText: "1 month free",
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500 6 weeks free</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=SPECIAL_OFFER_CHANGED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates BECAME_AVAILABLE alert", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2500,
+      effectiveRent: 2500,
+      availabilityStatus: "UNAVAILABLE",
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500 Available now</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=BECAME_AVAILABLE")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates ENTERED_BUDGET alert for matching watch item", async () => {
+    const { property, source } = await createSource();
+    await request(app)
+      .post("/api/watch-items")
+      .send({ propertyId: property.id, targetBudgetMax: 2600 })
+      .expect(201);
+    mockFetch(200, "<p>Rent: $2,500</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=ENTERED_BUDGET")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+    expect(alerts.body[0].watchListItemId).toBeTruthy();
+  });
+
+  it("does not duplicate alerts for unchanged repeated scrape", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 3000,
+      effectiveRent: 3000,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=PRICE_DROPPED")
+      .expect(200);
+    const history = await request(app)
+      .get(`/api/properties/${property.id}/price-history`)
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+    expect(history.body).toHaveLength(2);
+  });
+
+  it("allows a legitimate later price change after duplicate snapshot suppression", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 3000,
+      effectiveRent: 3000,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    mockFetch(200, "<p>Rent: $2,500</p>");
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    mockFetch(200, "<p>Rent: $2,400</p>");
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=PRICE_DROPPED")
+      .expect(200);
+    const history = await request(app)
+      .get(`/api/properties/${property.id}/price-history`)
+      .expect(200);
+    expect(alerts.body).toHaveLength(2);
+    expect(
+      history.body.map((snapshot: PriceSnapshotRecord) => snapshot.baseRent),
+    ).toEqual([3000, 2500, 2400]);
+  });
+
+  it("does not duplicate ENTERED_BUDGET alerts for repeated unchanged scrape", async () => {
+    const { property, source } = await createSource();
+    await request(app)
+      .post("/api/watch-items")
+      .send({ propertyId: property.id, targetBudgetMax: 2600 })
+      .expect(201);
+    mockFetch(200, "<p>Rent: $2,500</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=ENTERED_BUDGET")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates SCRAPE_FAILED alert for scrape failure", async () => {
+    const { source } = await createSource();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=SCRAPE_FAILED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("creates NEEDS_REVIEW alert for parser no-rent partial result", async () => {
+    const { source } = await createSource();
+    mockFetch(200, "<p>Call for availability</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=NEEDS_REVIEW")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("latest price returns newest snapshot", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2200,
+      effectiveRent: 2200,
+      scrapedAt: new Date("2026-01-01"),
+    });
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2400,
+      effectiveRent: 2400,
+      scrapedAt: new Date("2026-02-01"),
+    });
+
+    const latest = await request(app)
+      .get(`/api/properties/${property.id}/latest-price`)
+      .expect(200);
+    expect(latest.body.baseRent).toBe(2400);
+  });
+
+  it("price history returns chronological snapshots", async () => {
+    const { property, source } = await createSource();
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2400,
+      effectiveRent: 2400,
+      scrapedAt: new Date("2026-02-01"),
+    });
+    await createSnapshot(property.id, source.id, {
+      baseRent: 2200,
+      effectiveRent: 2200,
+      scrapedAt: new Date("2026-01-01"),
+    });
+
+    const history = await request(app)
+      .get(`/api/properties/${property.id}/price-history`)
+      .expect(200);
+    expect(
+      history.body.map((snapshot: PriceSnapshotRecord) => snapshot.baseRent),
+    ).toEqual([2200, 2400]);
   });
 });
 

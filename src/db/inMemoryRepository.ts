@@ -208,20 +208,22 @@ export class InMemoryRepository implements Repository {
   }
 
   async listPriceSnapshots(propertyId: string): Promise<PriceSnapshotRecord[]> {
-    return [...this.priceSnapshots.values()].filter(
-      (snapshot) => snapshot.propertyId === propertyId,
-    );
+    return [...this.priceSnapshots.values()]
+      .filter((snapshot) => snapshot.propertyId === propertyId)
+      .sort((a, b) => snapshotTime(b) - snapshotTime(a));
+  }
+
+  async listPriceHistory(propertyId: string): Promise<PriceSnapshotRecord[]> {
+    return [...this.priceSnapshots.values()]
+      .filter((snapshot) => snapshot.propertyId === propertyId)
+      .sort((a, b) => snapshotTime(a) - snapshotTime(b));
   }
 
   async getLatestPriceSnapshot(
     propertyId: string,
   ): Promise<PriceSnapshotRecord | null> {
     const snapshots = await this.listPriceSnapshots(propertyId);
-    return (
-      snapshots.sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-      )[0] ?? null
-    );
+    return snapshots[0] ?? null;
   }
 
   async createPriceSnapshot(
@@ -305,18 +307,47 @@ export class InMemoryRepository implements Repository {
     return record;
   }
 
-  async listAlerts(): Promise<AlertRecord[]> {
-    return [...this.alerts.values()].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    );
+  async listAlerts(filters?: {
+    isRead?: boolean;
+    propertyId?: string;
+    alertType?: AlertRecord["alertType"];
+  }): Promise<AlertRecord[]> {
+    return [...this.alerts.values()]
+      .filter((alert) =>
+        filters?.isRead === undefined ? true : alert.isRead === filters.isRead,
+      )
+      .filter((alert) =>
+        filters?.propertyId === undefined
+          ? true
+          : alert.propertyId === filters.propertyId,
+      )
+      .filter((alert) =>
+        filters?.alertType === undefined
+          ? true
+          : alert.alertType === filters.alertType,
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async createAlert(
+    data: Omit<AlertRecord, "id" | "createdAt" | "isRead"> & {
+      isRead?: boolean;
+    },
+  ): Promise<AlertRecord> {
+    const record = {
+      ...data,
+      id: id("alert"),
+      isRead: data.isRead ?? false,
+      createdAt: now(),
+    };
+    this.alerts.set(record.id, record);
+    return record;
   }
 
   async createAlertForTest(
     data: Omit<AlertRecord, "id" | "createdAt">,
   ): Promise<AlertRecord> {
-    const record = { ...data, id: id("alert"), createdAt: now() };
-    this.alerts.set(record.id, record);
-    return record;
+    return this.createAlert(data);
   }
 
   async markAlertRead(id: string): Promise<AlertRecord | null> {
@@ -326,4 +357,8 @@ export class InMemoryRepository implements Repository {
     this.alerts.set(id, updated);
     return updated;
   }
+}
+
+function snapshotTime(snapshot: PriceSnapshotRecord): number {
+  return (snapshot.scrapedAt ?? snapshot.createdAt).getTime();
 }

@@ -58,6 +58,17 @@ export const crawlerTiers = [
   "MANUAL",
 ] as const;
 export const scrapeRunStatuses = ["SUCCEEDED", "FAILED", "PARTIAL"] as const;
+export const alertTypes = [
+  "PRICE_DROPPED",
+  "PRICE_INCREASED",
+  "NEW_SPECIAL_OFFER",
+  "SPECIAL_OFFER_CHANGED",
+  "BECAME_AVAILABLE",
+  "ENTERED_BUDGET",
+  "SCRAPE_FAILED",
+  "NEEDS_REVIEW",
+] as const;
+export const alertSeverities = ["INFO", "WARNING", "CRITICAL"] as const;
 
 export type SourceType = (typeof sourceTypes)[number];
 export type WatchPriority = (typeof watchPriorities)[number];
@@ -68,6 +79,8 @@ export type ScrapeTaskType = (typeof scrapeTaskTypes)[number];
 export type ScrapeTaskStatus = (typeof scrapeTaskStatuses)[number];
 export type CrawlerTier = (typeof crawlerTiers)[number];
 export type ScrapeRunStatus = (typeof scrapeRunStatuses)[number];
+export type AlertType = (typeof alertTypes)[number];
+export type AlertSeverity = (typeof alertSeverities)[number];
 
 export type JsonData = unknown;
 
@@ -212,10 +225,10 @@ export interface AlertRecord {
   id: string;
   propertyId: string | null;
   watchListItemId: string | null;
-  alertType: string;
+  alertType: AlertType;
   title: string;
   message: string;
-  severity: string;
+  severity: AlertSeverity;
   isRead: boolean;
   createdAt: Date;
 }
@@ -260,6 +273,7 @@ export interface Repository {
   listWatchIntakes(): Promise<WatchIntakeRecord[]>;
   getWatchIntake(id: string): Promise<WatchIntakeRecord | null>;
   listPriceSnapshots(propertyId: string): Promise<PriceSnapshotRecord[]>;
+  listPriceHistory(propertyId: string): Promise<PriceSnapshotRecord[]>;
   getLatestPriceSnapshot(
     propertyId: string,
   ): Promise<PriceSnapshotRecord | null>;
@@ -287,7 +301,16 @@ export interface Repository {
   createRawPage(
     data: Omit<RawPageRecord, "id" | "createdAt">,
   ): Promise<RawPageRecord>;
-  listAlerts(): Promise<AlertRecord[]>;
+  listAlerts(filters?: {
+    isRead?: boolean;
+    propertyId?: string;
+    alertType?: AlertType;
+  }): Promise<AlertRecord[]>;
+  createAlert(
+    data: Omit<AlertRecord, "id" | "createdAt" | "isRead"> & {
+      isRead?: boolean;
+    },
+  ): Promise<AlertRecord>;
   createAlertForTest?(
     data: Omit<AlertRecord, "id" | "createdAt">,
   ): Promise<AlertRecord>;

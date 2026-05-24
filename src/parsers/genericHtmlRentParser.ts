@@ -26,6 +26,12 @@ function findSpecialOffer(text: string): string | undefined {
   return match?.[0];
 }
 
+function findAvailability(text: string): string | undefined {
+  if (/\bunavailable\b|\bnot\s+available\b/i.test(text)) return "UNAVAILABLE";
+  if (/\bavailable\b|\bnow\s+leasing\b/i.test(text)) return "AVAILABLE";
+  return undefined;
+}
+
 export const genericHtmlRentParser: PriceParser = {
   name: "generic-html-rent-parser",
   parse(input): ParsedPriceItem[] {
@@ -47,6 +53,7 @@ export const genericHtmlRentParser: PriceParser = {
         findNumber(/\b(\d+(?:\.\d+)?)\s*(?:baths?|ba)\b/i, text) ?? undefined,
       sqft: findNumber(/\b(\d{3,5})\s*(?:sq\.?\s*ft|sqft)\b/i, text),
       specialOfferText: findSpecialOffer(text),
+      availabilityStatus: findAvailability(text),
       rawData: {
         parser: genericHtmlRentParser.name,
         matchedRentText: rentMatch[0],

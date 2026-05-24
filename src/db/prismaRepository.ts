@@ -212,19 +212,24 @@ export class PrismaRepository implements Repository {
   }
 
   async listPriceSnapshots(propertyId: string): Promise<PriceSnapshotRecord[]> {
-    return this.prisma.priceSnapshot.findMany({
+    const snapshots = await this.prisma.priceSnapshot.findMany({
       where: { propertyId },
-      orderBy: { createdAt: "desc" },
     });
+    return snapshots.sort((a, b) => snapshotTime(b) - snapshotTime(a));
+  }
+
+  async listPriceHistory(propertyId: string): Promise<PriceSnapshotRecord[]> {
+    const snapshots = await this.prisma.priceSnapshot.findMany({
+      where: { propertyId },
+    });
+    return snapshots.sort((a, b) => snapshotTime(a) - snapshotTime(b));
   }
 
   async getLatestPriceSnapshot(
     propertyId: string,
   ): Promise<PriceSnapshotRecord | null> {
-    return this.prisma.priceSnapshot.findFirst({
-      where: { propertyId },
-      orderBy: { createdAt: "desc" },
-    });
+    const snapshots = await this.listPriceSnapshots(propertyId);
+    return snapshots[0] ?? null;
   }
 
   async createPriceSnapshot(
@@ -360,8 +365,37 @@ export class PrismaRepository implements Repository {
     });
   }
 
-  async listAlerts(): Promise<AlertRecord[]> {
-    return this.prisma.alert.findMany({ orderBy: { createdAt: "desc" } });
+  async listAlerts(filters?: {
+    isRead?: boolean;
+    propertyId?: string;
+    alertType?: AlertRecord["alertType"];
+  }): Promise<AlertRecord[]> {
+    return this.prisma.alert.findMany({
+      where: {
+        isRead: filters?.isRead,
+        propertyId: filters?.propertyId,
+        alertType: filters?.alertType,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async createAlert(
+    data: Omit<AlertRecord, "id" | "createdAt" | "isRead"> & {
+      isRead?: boolean;
+    },
+  ): Promise<AlertRecord> {
+    return this.prisma.alert.create({
+      data: {
+        propertyId: data.propertyId,
+        watchListItemId: data.watchListItemId,
+        alertType: data.alertType,
+        title: data.title,
+        message: data.message,
+        severity: data.severity,
+        isRead: data.isRead ?? false,
+      },
+    });
   }
 
   async markAlertRead(id: string): Promise<AlertRecord | null> {
@@ -374,4 +408,8 @@ export class PrismaRepository implements Repository {
       return null;
     }
   }
+}
+
+function snapshotTime(snapshot: PriceSnapshotRecord): number {
+  return (snapshot.scrapedAt ?? snapshot.createdAt).getTime();
 }

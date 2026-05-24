@@ -4,7 +4,7 @@ Rentotal is a backend-first rental/apartment Watch List and price tracking MVP. 
 
 ## Current Phase
 
-Current phase: Phase 2 - HTTP scraper foundation. Phase 0 + Phase 1 foundation is implemented, and Phase 2 HTTP scraping is next/current.
+Current phase: Phase 3 - Price snapshots, effective rent, and alerts. Phase 0 + Phase 1 foundation and Phase 2 HTTP scraping are implemented, and Phase 3 price tracking/alerts is next/current.
 
 Implemented now:
 
@@ -14,6 +14,7 @@ Implemented now:
 - watch lists, watch list items, and watch intakes
 - placeholder price snapshot, scrape task/run, alert, document, and document chunk models
 - Phase 2 HTTP scraper foundation with conservative generic rent parsing
+- Phase 3 effective rent, price history, latest price, and stored alert logic
 - raw page metadata and small raw text storage
 - basic REST APIs and tests
 
@@ -115,6 +116,7 @@ Properties:
 - `GET /api/properties/:id/sources`
 - `DELETE /api/property-sources/:sourceId`
 - `GET /api/properties/:id/price-snapshots`
+- `GET /api/properties/:id/price-history`
 - `GET /api/properties/:id/latest-price`
 
 Watch lists and items:
@@ -137,6 +139,7 @@ Watch intakes:
 Alerts:
 
 - `GET /api/alerts`
+- `GET /api/alerts?isRead=false&propertyId=...&alertType=...`
 - `PATCH /api/alerts/:id/read`
 
 Scraping:

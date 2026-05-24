@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 2 - HTTP scraper foundation.
+Current phase: Phase 3 - Price snapshots, effective rent, and alerts.
 
 Build only:
 
@@ -18,6 +18,9 @@ Build only:
 - conservative generic HTML rent parsing
 - raw page metadata or small raw text storage
 - price snapshots created only from parsed rent data
+- effective rent calculation
+- price history/latest price APIs
+- basic stored alert generation and deduplication
 
 Do not implement later phases unless explicitly requested.
 

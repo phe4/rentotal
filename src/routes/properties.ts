@@ -74,6 +74,10 @@ export function propertiesRouter(repository: Repository): Router {
     res.json(await repository.listPriceSnapshots(req.params.id));
   });
 
+  router.get("/properties/:id/price-history", async (req, res) => {
+    res.json(await repository.listPriceHistory(req.params.id));
+  });
+
   router.get("/properties/:id/latest-price", async (req, res) => {
     res.json(await repository.getLatestPriceSnapshot(req.params.id));
   });
