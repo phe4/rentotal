@@ -3,7 +3,10 @@ import type {
   PriceSnapshotRecord,
   PropertyRecord,
   PropertySourceRecord,
+  RawPageRecord,
   Repository,
+  ScrapeRunRecord,
+  ScrapeTaskRecord,
   WatchIntakeRecord,
   WatchListItemRecord,
   WatchListRecord,
@@ -28,6 +31,9 @@ export class InMemoryRepository implements Repository {
   private watchItems = new Map<string, WatchListItemRecord>();
   private watchIntakes = new Map<string, WatchIntakeRecord>();
   private priceSnapshots = new Map<string, PriceSnapshotRecord>();
+  private scrapeTasks = new Map<string, ScrapeTaskRecord>();
+  private scrapeRuns = new Map<string, ScrapeRunRecord>();
+  private rawPages = new Map<string, RawPageRecord>();
   private alerts = new Map<string, AlertRecord>();
 
   async createProperty(
@@ -96,6 +102,10 @@ export class InMemoryRepository implements Repository {
     };
     this.sources.set(record.id, record);
     return record;
+  }
+
+  async getPropertySource(id: string): Promise<PropertySourceRecord | null> {
+    return this.sources.get(id) ?? null;
   }
 
   async listPropertySources(
@@ -212,6 +222,87 @@ export class InMemoryRepository implements Repository {
         (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
       )[0] ?? null
     );
+  }
+
+  async createPriceSnapshot(
+    data: Omit<PriceSnapshotRecord, "id" | "createdAt">,
+  ): Promise<PriceSnapshotRecord> {
+    const record = { ...data, id: id("price_snapshot"), createdAt: now() };
+    this.priceSnapshots.set(record.id, record);
+    return record;
+  }
+
+  async createScrapeTask(
+    data: Omit<ScrapeTaskRecord, "id" | "createdAt" | "updatedAt">,
+  ): Promise<ScrapeTaskRecord | null> {
+    if (data.propertyId && !this.properties.has(data.propertyId)) return null;
+    if (data.sourceId && !this.sources.has(data.sourceId)) return null;
+    const record = {
+      ...data,
+      id: id("scrape_task"),
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.scrapeTasks.set(record.id, record);
+    return record;
+  }
+
+  async listScrapeTasks(): Promise<ScrapeTaskRecord[]> {
+    return [...this.scrapeTasks.values()].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+  }
+
+  async getScrapeTask(id: string): Promise<ScrapeTaskRecord | null> {
+    return this.scrapeTasks.get(id) ?? null;
+  }
+
+  async updateScrapeTask(
+    id: string,
+    data: Partial<ScrapeTaskRecord>,
+  ): Promise<ScrapeTaskRecord | null> {
+    const existing = this.scrapeTasks.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data, updatedAt: now() };
+    this.scrapeTasks.set(id, updated);
+    return updated;
+  }
+
+  async createScrapeRun(
+    data: Omit<ScrapeRunRecord, "id" | "createdAt">,
+  ): Promise<ScrapeRunRecord> {
+    const record = { ...data, id: id("scrape_run"), createdAt: now() };
+    this.scrapeRuns.set(record.id, record);
+    return record;
+  }
+
+  async listScrapeRuns(): Promise<ScrapeRunRecord[]> {
+    return [...this.scrapeRuns.values()].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+  }
+
+  async getScrapeRun(id: string): Promise<ScrapeRunRecord | null> {
+    return this.scrapeRuns.get(id) ?? null;
+  }
+
+  async updateScrapeRun(
+    id: string,
+    data: Partial<ScrapeRunRecord>,
+  ): Promise<ScrapeRunRecord | null> {
+    const existing = this.scrapeRuns.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data };
+    this.scrapeRuns.set(id, updated);
+    return updated;
+  }
+
+  async createRawPage(
+    data: Omit<RawPageRecord, "id" | "createdAt">,
+  ): Promise<RawPageRecord> {
+    const record = { ...data, id: id("raw_page"), createdAt: now() };
+    this.rawPages.set(record.id, record);
+    return record;
   }
 
   async listAlerts(): Promise<AlertRecord[]> {

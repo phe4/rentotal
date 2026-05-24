@@ -137,6 +137,7 @@ model Property {
   documents       Document[]
   documentChunks  DocumentChunk[]
   priceSnapshots  PriceSnapshot[]
+  rawPages        RawPage[]
   scrapeRuns      ScrapeRun[]
   scrapeTasks     ScrapeTask[]
   sources         PropertySource[]
@@ -156,6 +157,7 @@ model PropertySource {
   updatedAt        DateTime           @updatedAt
   priceSnapshots   PriceSnapshot[]
   property         Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  rawPages         RawPage[]
   scrapeRuns       ScrapeRun[]
   scrapeTasks      ScrapeTask[]
 
@@ -280,10 +282,33 @@ model ScrapeRun {
   property      Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
   source        PropertySource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   task          ScrapeTask?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  rawPages      RawPage[]
 
   @@index([propertyId])
   @@index([sourceId])
   @@index([taskId])
+}
+
+model RawPage {
+  id                String          @id @default(cuid())
+  scrapeRunId       String?
+  propertyId        String?
+  sourceId          String?
+  url               String
+  contentType       String?
+  contentHash       String?
+  rawText           String?
+  rawJson           Json?
+  rawHtmlStorageUrl String?
+  createdAt         DateTime        @default(now())
+  property          Property?       @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  scrapeRun         ScrapeRun?      @relation(fields: [scrapeRunId], references: [id], onDelete: SetNull)
+  source            PropertySource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([scrapeRunId])
+  @@index([propertyId])
+  @@index([sourceId])
+  @@index([contentHash])
 }
 
 model Alert {

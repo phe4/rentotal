@@ -1,6 +1,6 @@
 # Rentotal
 
-Rentotal is a backend-first rental/apartment Watch List and price tracking MVP. The current version stores manually added apartments, source URLs, watch list items, watch intakes, placeholder price snapshots, scrape task/run records, alerts, and AI-ready documents without implementing scraping or AI.
+Rentotal is a backend-first rental/apartment Watch List and price tracking MVP. The current version stores manually added apartments, source URLs, watch list items, watch intakes, price snapshots, scrape task/run records, raw page records, alerts, and AI-ready documents without implementing browser scraping or AI.
 
 ## Current Phase
 
@@ -13,11 +13,13 @@ Implemented now:
 - manual properties and property sources
 - watch lists, watch list items, and watch intakes
 - placeholder price snapshot, scrape task/run, alert, document, and document chunk models
+- Phase 2 HTTP scraper foundation with conservative generic rent parsing
+- raw page metadata and small raw text storage
 - basic REST APIs and tests
 
 Not implemented yet:
 
-- scraping
+- browser scraping
 - Playwright
 - AI calls
 - embeddings or pgvector
@@ -136,6 +138,15 @@ Alerts:
 
 - `GET /api/alerts`
 - `PATCH /api/alerts/:id/read`
+
+Scraping:
+
+- `POST /api/scrape-tasks`
+- `GET /api/scrape-tasks`
+- `POST /api/scrape-tasks/:id/run`
+- `POST /api/property-sources/:sourceId/scrape`
+- `GET /api/scrape-runs`
+- `GET /api/scrape-runs/:id`
 
 ## Future Phases
 

@@ -12,11 +12,12 @@ Current phase: Phase 2 - HTTP scraper foundation.
 
 Build only:
 
-- project foundation
-- database schema
-- manual Watch List
-- property/source intake
-- placeholder models for future scraping, alerts, and AI-ready documents
+- Phase 0 + Phase 1 foundation
+- HTTP scraper foundation
+- scrape task and scrape run APIs
+- conservative generic HTML rent parsing
+- raw page metadata or small raw text storage
+- price snapshots created only from parsed rent data
 
 Do not implement later phases unless explicitly requested.
 

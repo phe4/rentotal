@@ -4,7 +4,10 @@ import type {
   PriceSnapshotRecord,
   PropertyRecord,
   PropertySourceRecord,
+  RawPageRecord,
   Repository,
+  ScrapeRunRecord,
+  ScrapeTaskRecord,
   WatchIntakeRecord,
   WatchListItemRecord,
   WatchListRecord,
@@ -100,6 +103,10 @@ export class PrismaRepository implements Repository {
         metadata: data.metadata === null ? undefined : data.metadata,
       },
     });
+  }
+
+  async getPropertySource(id: string): Promise<PropertySourceRecord | null> {
+    return this.prisma.propertySource.findUnique({ where: { id } });
   }
 
   async listPropertySources(
@@ -217,6 +224,139 @@ export class PrismaRepository implements Repository {
     return this.prisma.priceSnapshot.findFirst({
       where: { propertyId },
       orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async createPriceSnapshot(
+    data: Omit<PriceSnapshotRecord, "id" | "createdAt">,
+  ): Promise<PriceSnapshotRecord> {
+    return this.prisma.priceSnapshot.create({
+      data: {
+        propertyId: data.propertyId,
+        sourceId: data.sourceId,
+        floorplanName: data.floorplanName,
+        unitNumber: data.unitNumber,
+        bedrooms: data.bedrooms,
+        bathrooms: data.bathrooms,
+        sqft: data.sqft,
+        baseRent: data.baseRent,
+        effectiveRent: data.effectiveRent,
+        leaseTermMonths: data.leaseTermMonths,
+        moveInDate: data.moveInDate,
+        specialOfferText: data.specialOfferText,
+        specialOfferValue: data.specialOfferValue,
+        mandatoryFees: data.mandatoryFees,
+        availabilityStatus: data.availabilityStatus,
+        scrapedAt: data.scrapedAt,
+        rawData: data.rawData === null ? undefined : data.rawData,
+        parseStatus: data.parseStatus === "PARSED" ? "PARSED" : "NOT_PARSED",
+        errorMessage: data.errorMessage,
+      },
+    });
+  }
+
+  async createScrapeTask(
+    data: Omit<ScrapeTaskRecord, "id" | "createdAt" | "updatedAt">,
+  ): Promise<ScrapeTaskRecord | null> {
+    if (data.propertyId && !(await this.getProperty(data.propertyId)))
+      return null;
+    if (data.sourceId && !(await this.getPropertySource(data.sourceId)))
+      return null;
+    return this.prisma.scrapeTask.create({ data });
+  }
+
+  async listScrapeTasks(): Promise<ScrapeTaskRecord[]> {
+    return this.prisma.scrapeTask.findMany({ orderBy: { createdAt: "desc" } });
+  }
+
+  async getScrapeTask(id: string): Promise<ScrapeTaskRecord | null> {
+    return this.prisma.scrapeTask.findUnique({ where: { id } });
+  }
+
+  async updateScrapeTask(
+    id: string,
+    data: Partial<ScrapeTaskRecord>,
+  ): Promise<ScrapeTaskRecord | null> {
+    try {
+      return await this.prisma.scrapeTask.update({
+        where: { id },
+        data: withoutUndefined({
+          propertyId: data.propertyId,
+          sourceId: data.sourceId,
+          taskType: data.taskType,
+          priority: data.priority,
+          status: data.status,
+          scheduledAt: data.scheduledAt,
+          startedAt: data.startedAt,
+          finishedAt: data.finishedAt,
+          retryCount: data.retryCount,
+          maxRetries: data.maxRetries,
+          crawlerTier: data.crawlerTier,
+          errorMessage: data.errorMessage,
+        }),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async createScrapeRun(
+    data: Omit<ScrapeRunRecord, "id" | "createdAt">,
+  ): Promise<ScrapeRunRecord> {
+    return this.prisma.scrapeRun.create({ data });
+  }
+
+  async listScrapeRuns(): Promise<ScrapeRunRecord[]> {
+    return this.prisma.scrapeRun.findMany({ orderBy: { createdAt: "desc" } });
+  }
+
+  async getScrapeRun(id: string): Promise<ScrapeRunRecord | null> {
+    return this.prisma.scrapeRun.findUnique({ where: { id } });
+  }
+
+  async updateScrapeRun(
+    id: string,
+    data: Partial<ScrapeRunRecord>,
+  ): Promise<ScrapeRunRecord | null> {
+    try {
+      return await this.prisma.scrapeRun.update({
+        where: { id },
+        data: withoutUndefined({
+          taskId: data.taskId,
+          propertyId: data.propertyId,
+          sourceId: data.sourceId,
+          crawlerTier: data.crawlerTier,
+          status: data.status,
+          startedAt: data.startedAt,
+          finishedAt: data.finishedAt,
+          durationMs: data.durationMs,
+          httpStatus: data.httpStatus,
+          contentHash: data.contentHash,
+          itemsFound: data.itemsFound,
+          rawStorageUrl: data.rawStorageUrl,
+          errorMessage: data.errorMessage,
+        }),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async createRawPage(
+    data: Omit<RawPageRecord, "id" | "createdAt">,
+  ): Promise<RawPageRecord> {
+    return this.prisma.rawPage.create({
+      data: {
+        scrapeRunId: data.scrapeRunId,
+        propertyId: data.propertyId,
+        sourceId: data.sourceId,
+        url: data.url,
+        contentType: data.contentType,
+        contentHash: data.contentHash,
+        rawText: data.rawText,
+        rawJson: data.rawJson === null ? undefined : data.rawJson,
+        rawHtmlStorageUrl: data.rawHtmlStorageUrl,
+      },
     });
   }
 

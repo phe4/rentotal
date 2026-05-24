@@ -35,12 +35,39 @@ export const parsedStatuses = [
   "FAILED",
   "NEEDS_REVIEW",
 ] as const;
+export const scrapeTaskTypes = [
+  "PRICE_CHECK",
+  "SOURCE_DISCOVERY",
+  "REVIEW_CHECK",
+  "SOCIAL_SEARCH",
+  "AI_EXTRACTION",
+] as const;
+export const scrapeTaskStatuses = [
+  "PENDING",
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+] as const;
+export const crawlerTiers = [
+  "API",
+  "HTTP",
+  "DIRECT_JSON",
+  "BROWSER",
+  "AI_EXTRACTION",
+  "MANUAL",
+] as const;
+export const scrapeRunStatuses = ["SUCCEEDED", "FAILED", "PARTIAL"] as const;
 
 export type SourceType = (typeof sourceTypes)[number];
 export type WatchPriority = (typeof watchPriorities)[number];
 export type WatchStatus = (typeof watchStatuses)[number];
 export type IntakeInputType = (typeof intakeInputTypes)[number];
 export type ParsedStatus = (typeof parsedStatuses)[number];
+export type ScrapeTaskType = (typeof scrapeTaskTypes)[number];
+export type ScrapeTaskStatus = (typeof scrapeTaskStatuses)[number];
+export type CrawlerTier = (typeof crawlerTiers)[number];
+export type ScrapeRunStatus = (typeof scrapeRunStatuses)[number];
 
 export type JsonData = unknown;
 
@@ -111,6 +138,73 @@ export interface PriceSnapshotRecord {
   id: string;
   propertyId: string;
   sourceId: string | null;
+  floorplanName?: string | null;
+  unitNumber?: string | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  sqft?: number | null;
+  baseRent?: number | null;
+  effectiveRent?: number | null;
+  leaseTermMonths?: number | null;
+  moveInDate?: Date | null;
+  specialOfferText?: string | null;
+  specialOfferValue?: number | null;
+  mandatoryFees?: number | null;
+  availabilityStatus?: string | null;
+  scrapedAt?: Date | null;
+  rawData?: JsonData | null;
+  parseStatus?: string;
+  errorMessage?: string | null;
+  createdAt: Date;
+}
+
+export interface ScrapeTaskRecord {
+  id: string;
+  propertyId: string | null;
+  sourceId: string | null;
+  taskType: ScrapeTaskType;
+  priority: WatchPriority;
+  status: ScrapeTaskStatus;
+  scheduledAt: Date | null;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  retryCount: number;
+  maxRetries: number;
+  crawlerTier: CrawlerTier;
+  errorMessage: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ScrapeRunRecord {
+  id: string;
+  taskId: string | null;
+  propertyId: string | null;
+  sourceId: string | null;
+  crawlerTier: CrawlerTier;
+  status: ScrapeRunStatus;
+  startedAt: Date;
+  finishedAt: Date | null;
+  durationMs: number | null;
+  httpStatus: number | null;
+  contentHash: string | null;
+  itemsFound: number | null;
+  rawStorageUrl: string | null;
+  errorMessage: string | null;
+  createdAt: Date;
+}
+
+export interface RawPageRecord {
+  id: string;
+  scrapeRunId: string | null;
+  propertyId: string | null;
+  sourceId: string | null;
+  url: string;
+  contentType: string | null;
+  contentHash: string | null;
+  rawText: string | null;
+  rawJson: JsonData | null;
+  rawHtmlStorageUrl: string | null;
   createdAt: Date;
 }
 
@@ -140,6 +234,7 @@ export interface Repository {
   createPropertySource(
     data: Omit<PropertySourceRecord, "id" | "createdAt" | "updatedAt">,
   ): Promise<PropertySourceRecord | null>;
+  getPropertySource(id: string): Promise<PropertySourceRecord | null>;
   listPropertySources(propertyId: string): Promise<PropertySourceRecord[]>;
   deletePropertySource(sourceId: string): Promise<boolean>;
   listWatchLists(): Promise<WatchListRecord[]>;
@@ -168,6 +263,30 @@ export interface Repository {
   getLatestPriceSnapshot(
     propertyId: string,
   ): Promise<PriceSnapshotRecord | null>;
+  createPriceSnapshot(
+    data: Omit<PriceSnapshotRecord, "id" | "createdAt">,
+  ): Promise<PriceSnapshotRecord>;
+  createScrapeTask(
+    data: Omit<ScrapeTaskRecord, "id" | "createdAt" | "updatedAt">,
+  ): Promise<ScrapeTaskRecord | null>;
+  listScrapeTasks(): Promise<ScrapeTaskRecord[]>;
+  getScrapeTask(id: string): Promise<ScrapeTaskRecord | null>;
+  updateScrapeTask(
+    id: string,
+    data: Partial<ScrapeTaskRecord>,
+  ): Promise<ScrapeTaskRecord | null>;
+  createScrapeRun(
+    data: Omit<ScrapeRunRecord, "id" | "createdAt">,
+  ): Promise<ScrapeRunRecord>;
+  listScrapeRuns(): Promise<ScrapeRunRecord[]>;
+  getScrapeRun(id: string): Promise<ScrapeRunRecord | null>;
+  updateScrapeRun(
+    id: string,
+    data: Partial<ScrapeRunRecord>,
+  ): Promise<ScrapeRunRecord | null>;
+  createRawPage(
+    data: Omit<RawPageRecord, "id" | "createdAt">,
+  ): Promise<RawPageRecord>;
   listAlerts(): Promise<AlertRecord[]>;
   createAlertForTest?(
     data: Omit<AlertRecord, "id" | "createdAt">,
