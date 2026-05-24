@@ -116,6 +116,17 @@ export class InMemoryRepository implements Repository {
     );
   }
 
+  async updatePropertySource(
+    id: string,
+    data: Partial<PropertySourceRecord>,
+  ): Promise<PropertySourceRecord | null> {
+    const existing = this.sources.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data, updatedAt: now() };
+    this.sources.set(id, updated);
+    return updated;
+  }
+
   async deletePropertySource(sourceId: string): Promise<boolean> {
     return this.sources.delete(sourceId);
   }

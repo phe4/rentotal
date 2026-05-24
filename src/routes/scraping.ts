@@ -46,7 +46,7 @@ export function scrapingRouter(
       if (taskType !== "PRICE_CHECK") {
         throw new HttpError(
           400,
-          "Only PRICE_CHECK scrape tasks are supported in Phase 4.",
+          "Only PRICE_CHECK scrape tasks are supported in the current scraper foundation.",
         );
       }
 

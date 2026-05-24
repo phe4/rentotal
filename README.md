@@ -1,393 +1,136 @@
-很好，Phase 4 现在可以认为稳定完成了。尤其是这两个 fix 很重要：
+# Rentotal
 
-```text
-1. browserCollector 明确关闭 page/context/browser
-2. scrape task 创建限制为 HTTP，因为 browser 只作为 fallback
-```
+Rentotal is a backend-first rental/apartment watch list and price tracking platform.
 
-现在可以进入 **Phase 5：Direct JSON Endpoint Discovery**。
+The current product is an MVP foundation for manually tracking properties and source URLs, collecting price snapshots, and preparing for future apartment research features. It is built with TypeScript, Express, PostgreSQL, and Prisma.
 
-Phase 5 的核心目标是：
-**当 Playwright fallback 打开动态页面时，顺便监听 network response，识别可能包含 rent / floorplan / availability 的 JSON endpoint，保存到 `PropertySource.metadata`。以后优先直接请求这个 JSON endpoint，减少浏览器使用。**
+## Current State
 
----
+Completed phases:
 
-## Phase 5 应该解决什么问题
+- Phase 0/1 Watch List foundation: properties, property sources, watch lists/items, watch intakes, placeholder scraping, alerts, and AI-ready document storage.
+- Phase 2 HTTP scraper: scrape tasks/runs, plain HTTP collection, conservative generic HTML rent parsing, RawPage storage, and price snapshots from parsed rent data.
+- Phase 3 effective rent, price history, alerts: deterministic effective rent calculation, latest price, price history, price change alerts, budget alerts, and alert deduplication.
+- Phase 4 Playwright fallback: browser fallback for dynamic pages after HTTP parsing finds no rent.
+- Phase 5 direct JSON endpoint discovery: candidate JSON endpoint capture during browser fallback, source metadata persistence, direct JSON collector, and generic JSON rent parser.
 
-现在流程是：
+## Not Implemented Yet
 
-```text
-HTTP fetch
-  ↓ no rent
-Playwright rendered HTML
-  ↓ parse rent
-PriceSnapshot / Alert
-```
+These features are intentionally out of scope for the current implementation:
 
-Phase 5 后理想流程是：
-
-```text
-如果 source.metadata.directJsonEndpoint 存在
-  ↓
-直接 HTTP 请求 JSON endpoint
-  ↓
-genericJsonRentParser
-  ↓
-PriceSnapshot / Alert
-
-否则：
-HTTP fetch
-  ↓ no rent
-Playwright fallback + network capture
-  ↓
-发现 JSON endpoint
-  ↓
-保存到 source.metadata
-  ↓
-解析 rendered HTML 或 JSON response
-```
-
-这样下次就不用每次开浏览器。
-
----
-
-# 第一步：先让 Codex 创建 Phase 5 文档
-
-````text
-Read AGENTS.md, docs/roadmap.md, docs/phases/phase-02-http-scraper.md, docs/phases/phase-03-snapshots-alerts.md, docs/phases/phase-04-playwright-fallback.md, README.md, and prisma/schema.prisma.
-
-We are preparing for Phase 5, but do not implement code yet.
-
-Task:
-1. Update AGENTS.md current phase to:
-   Current phase: Phase 5 - Direct JSON endpoint discovery.
-2. Create docs/phases/phase-05-direct-json-discovery.md with the exact content below.
-3. Update README only if it has a current-phase section; change it to mention Phase 5 is next/current.
-4. Do not modify source code.
-5. Do not modify Prisma schema unless only documentation references require no schema change.
-6. Do not install packages.
-7. Do not implement direct JSON discovery yet.
-
-Create this file:
-
-docs/phases/phase-05-direct-json-discovery.md
-
-Content:
-
-# Phase 5: Direct JSON Endpoint Discovery
-
-## Goal
-
-Reduce repeated browser usage by discovering internal JSON endpoints during browser fallback.
-
-Many apartment websites render prices dynamically, but the data often comes from XHR/fetch/GraphQL JSON responses. Phase 5 should detect likely rent/availability JSON responses during Playwright fallback, persist endpoint metadata, and support future direct JSON scraping.
-
-This phase should make browser fallback smarter, but it should not become a full domain-specific parser project.
-
-## In Scope
-
-- Capture network responses during browser fallback
-- Identify candidate JSON responses that may contain rent, floorplan, unit, availability, or concession data
-- Store candidate endpoint metadata in `PropertySource.metadata`
-- Add a direct JSON collector
-- Add a conservative generic JSON rent parser
-- Prefer direct JSON collector when a source already has a saved direct JSON endpoint
-- Fall back to existing HTTP and browser pipeline if direct JSON fails
-- Add tests with mocked JSON responses and mocked browser network candidates
-- Keep existing snapshot, effective rent, alert, and dedup logic
-
-## Out of Scope
-
-Do not implement:
-- domain-specific parsers for Entrata/Yardi/Greystar/etc.
-- full GraphQL operation replay beyond basic captured endpoint metadata
-- login/session/cookie replay beyond simple headers if already captured safely
-- anti-detection, stealth plugins, proxy rotation, CAPTCHA bypass, or paywall/login bypass
-- AI extraction
-- embeddings
-- pgvector
-- vector search
-- Google Places
 - maps
-- review crawling
-- social/forum crawling
-- scoring/recommendations
+- Google Places
+- AI calls or agent research
+- embeddings or pgvector
+- reviews/social/forum crawling
+- scoring or recommendations
 - frontend
 - authentication
-- payment
-- email/SMS/push notifications
+- payments or notification delivery
 
-## Architecture
+## Setup
 
-Add or extend:
+Install dependencies:
 
-collectors/
-- directJsonCollector.ts
-- browserCollector.ts network capture support
-
-parsers/
-- genericJsonRentParser.ts
-- priceParser.ts may remain shared if appropriate
-
-services/
-- scrapeService.ts should orchestrate:
-  1. direct JSON path if endpoint metadata exists
-  2. HTTP path
-  3. browser fallback path
-  4. candidate endpoint persistence
-
-## Metadata Shape
-
-Store discovered endpoint candidates in `PropertySource.metadata`.
-
-Recommended shape:
-
-```json
-{
-  "directJsonCandidates": [
-    {
-      "url": "https://example.com/api/availability",
-      "method": "GET",
-      "contentType": "application/json",
-      "confidence": 0.82,
-      "reason": "JSON response contained rent and floorplan-like keys",
-      "discoveredAt": "2026-05-24T00:00:00.000Z"
-    }
-  ],
-  "preferredDirectJsonEndpoint": {
-    "url": "https://example.com/api/availability",
-    "method": "GET",
-    "contentType": "application/json",
-    "confidence": 0.82,
-    "discoveredAt": "2026-05-24T00:00:00.000Z"
-  }
-}
-````
-
-Keep this flexible. Do not require a schema migration unless necessary.
-
-## Candidate Detection Rules
-
-A JSON response can be a candidate if:
-
-* content-type includes `application/json`, or response body parses as JSON
-* URL or JSON keys contain signals such as:
-
-  * rent
-  * price
-  * pricing
-  * floorplan
-  * floorPlan
-  * unit
-  * apartment
-  * availability
-  * available
-  * beds
-  * baths
-  * sqft
-  * concession
-  * special
-  * lease
-
-Candidate confidence should be conservative.
-
-Avoid storing candidates for:
-
-* analytics
-* tracking
-* ads
-* maps
-* fonts/images/media
-* unrelated app config
-* auth/session/user endpoints
-
-Do not store sensitive headers, cookies, tokens, or personal data.
-
-## Direct JSON Collector
-
-If `PropertySource.metadata.preferredDirectJsonEndpoint` exists:
-
-1. Try direct JSON collector first.
-2. Fetch the endpoint using plain HTTP.
-3. Parse JSON using generic JSON parser.
-4. If successful, create snapshots and alerts using existing pipeline.
-5. If direct JSON fails or finds no rent, fall back to existing HTTP path and browser fallback.
-
-The direct JSON path should use crawler tier `DIRECT_JSON`.
-
-## Generic JSON Parser Rules
-
-The parser should be conservative and recursive.
-
-It may extract rent items from JSON objects/arrays containing fields such as:
-
-* rent
-* price
-* marketRent
-* minRent
-* maxRent
-* floorplan
-* floorPlanName
-* unit
-* unitNumber
-* beds
-* bedrooms
-* baths
-* bathrooms
-* sqft
-* squareFeet
-* available
-* availability
-* moveInDate
-* special
-* concession
-
-Rules:
-
-* Only create ParsedPriceItem when a rent-like numeric field exists.
-* Do not hallucinate rent from unrelated numbers.
-* Prefer baseRent from clear rent/price fields.
-* Capture rawData for the matched object.
-* Return [] if confidence is low.
-
-## Browser Network Capture
-
-During browser fallback:
-
-* listen to JSON responses
-* inspect small/medium JSON bodies only
-* avoid storing huge responses blindly
-* collect candidate metadata
-* optionally keep a small sanitized JSON sample in RawPage.rawJson if practical
-* persist candidates to `PropertySource.metadata`
-
-If browser rendered HTML parser succeeds but network candidates are found, still save candidates for future faster runs.
-
-## ScrapeRun Behavior
-
-When direct JSON path is used:
-
-* create a ScrapeRun with crawlerTier `DIRECT_JSON`
-* save RawPage with contentType application/json if practical
-* create PriceSnapshot rows on parser success
-* create NEEDS_REVIEW if JSON succeeds but no rent found
-* create SCRAPE_FAILED if endpoint fetch fails
-
-If direct JSON fails, continue to HTTP/browser fallback rather than failing the whole scrape immediately.
-
-## Testing
-
-Use mocked HTTP/browser behavior only.
-
-Do not hit real external websites.
-
-Add tests for:
-
-1. direct JSON endpoint is used first when metadata has `preferredDirectJsonEndpoint`.
-2. direct JSON parser creates PriceSnapshot from simple JSON rent data.
-3. direct JSON no-rent response falls back to HTTP/browser path.
-4. direct JSON HTTP failure falls back to HTTP/browser path.
-5. browser fallback captures candidate JSON endpoint metadata.
-6. candidate metadata excludes obvious analytics/tracking endpoints.
-7. generic JSON parser does not hallucinate rent from unrelated numeric JSON.
-8. existing Phase 1-4 tests still pass.
-
-## Constraints
-
-* Do not implement domain-specific parsers.
-* Do not add AI dependencies.
-* Do not add embeddings or pgvector.
-* Do not implement maps or Google Places.
-* Do not implement review/social/forum crawling.
-* Do not implement scoring or recommendations.
-* Do not add authentication.
-* Do not add frontend.
-* Do not add stealth/proxy/anti-detection logic.
-* Do not store cookies, auth tokens, or sensitive headers.
-* Keep changes reviewable.
-* Do not make broad refactors.
-
-## Acceptance Criteria
-
-Phase 5 is complete when:
-
-* browser fallback can capture candidate JSON endpoints
-* candidate metadata is saved to `PropertySource.metadata`
-* direct JSON collector can use saved endpoint metadata first
-* generic JSON parser can extract simple rent data
-* direct JSON failures gracefully fall back to existing HTTP/browser flow
-* no sensitive headers/cookies/tokens are stored
-* tests mock all network/browser behavior
-* all previous tests still pass
-* lint, format, tests, Prisma generate, and Prisma validate pass
-
+```bash
+npm install
 ```
 
-After making the documentation changes:
-- Run formatter if configured.
-- Do not run code implementation.
-- Summarize changed files.
+Create a `.env` file with a PostgreSQL connection string:
+
+```bash
+DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/rentotal"
 ```
 
----
+Generate the Prisma client:
 
-# 第二步：文档完成后，让 Codex 实现 Phase 5
-
-```text
-Read AGENTS.md, docs/roadmap.md, docs/phases/phase-02-http-scraper.md, docs/phases/phase-03-snapshots-alerts.md, docs/phases/phase-04-playwright-fallback.md, docs/phases/phase-05-direct-json-discovery.md, README.md, prisma/schema.prisma, source routes, repository files, services, collectors, parsers, and tests.
-
-Implement Phase 5 exactly as described in docs/phases/phase-05-direct-json-discovery.md.
-
-Do not implement anything listed as out of scope.
-
-Before coding:
-1. Inspect the current repo structure.
-2. Identify existing scrapeService, httpCollector, browserCollector, parser, repository, metadata, and test patterns.
-3. Write a short implementation plan.
-4. Then implement only scoped Phase 5 changes.
-
-Important:
-- Direct JSON should be tried first only when source metadata has a preferred direct JSON endpoint.
-- If direct JSON fails or finds no rent, fall back to the existing HTTP/browser flow.
-- Browser fallback may capture candidate JSON endpoints and save them to source metadata.
-- Do not implement domain-specific parsers.
-- Do not add AI.
-- Do not add maps or Google Places.
-- Do not add frontend.
-- Do not store cookies, auth tokens, or sensitive headers.
-- Do not add stealth/proxy/anti-detection logic.
-- Do not make broad refactors.
-- Unit/API tests should mock HTTP/browser behavior.
-- Do not hit real external websites in tests.
-
-After coding:
-1. Run formatter/linter if configured.
-2. Run tests.
-3. Run Prisma generate and validate.
-4. Summarize changed files.
-5. Summarize commands run.
-6. Summarize any failures or warnings.
-7. State clearly whether Phase 5 is complete or if anything remains.
+```bash
+npm run prisma:generate
 ```
 
----
+Run database migrations:
 
-## Phase 5 完成后你会得到什么
-
-完成后流程会变成：
-
-```text
-第一次：
-HTTP 无法解析
-→ Browser fallback
-→ 抓到 rendered rent
-→ 同时发现 /api/availability
-→ 保存 directJson endpoint
-
-第二次：
-直接请求 /api/availability
-→ 不开浏览器
-→ 快很多
+```bash
+npm run prisma:migrate
 ```
 
-这一步对性能非常关键。Phase 4 是“能处理动态页面”，Phase 5 是“不要每次都用浏览器处理动态页面”。
+Start the development server:
+
+```bash
+npm run dev
+```
+
+The API starts from `src/server.ts` and mounts routes under `/api`.
+
+## Test And Validation
+
+Run TypeScript validation:
+
+```bash
+npm run lint
+```
+
+Run tests:
+
+```bash
+npm test
+```
+
+Regenerate Prisma client:
+
+```bash
+npm run prisma:generate
+```
+
+Validate the Prisma schema with `DATABASE_URL` available:
+
+```bash
+npx prisma validate
+```
+
+If you need to provide `DATABASE_URL` inline in PowerShell:
+
+```powershell
+$env:DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/rentotal"; npx prisma validate
+```
+
+## Playwright Note
+
+Browser fallback exists for local dynamic-page scraping, but API tests mock browser collector behavior and do not launch a real browser.
+
+For real local browser use, install Playwright browser binaries if needed:
+
+```bash
+npx playwright install
+```
+
+## Main API Groups
+
+- Properties: create, list, get, update, delete properties.
+- Property sources: attach external source URLs and metadata to properties.
+- Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes.
+- Scrape tasks/runs: create scrape tasks, run them, and inspect scrape run records.
+- Price snapshots/history/latest price: store historical snapshots and read latest or chronological price data.
+- Alerts: list stored alerts and mark alerts as read.
+
+## Scraping Pipeline
+
+The scraper pipeline is intentionally conservative:
+
+1. DIRECT_JSON runs first only when `PropertySource.metadata.preferredDirectJsonEndpoint` exists.
+2. HTTP collection runs next using plain fetch and the generic HTML rent parser.
+3. Browser fallback runs only after HTTP succeeds but no rent is parsed.
+4. Browser fallback can capture likely rent/availability JSON endpoint candidates and save them to `PropertySource.metadata`.
+5. Price snapshots, effective rent calculation, duplicate suppression, and alerts reuse the existing shared pipeline.
+
+The generic parsers should not create fake price data when rent is not present.
+
+## Future Phases
+
+- Phase 6: domain-specific parsers for common apartment platforms.
+- Phase 7: Google Places and map discovery.
+- Phase 8: reviews, social, and forum data.
+- Phase 9: AI, pgvector, semantic search, and agent research.
+- Phase 10: scoring and recommendations.
+
+See [docs/roadmap.md](docs/roadmap.md) for the long-term roadmap.

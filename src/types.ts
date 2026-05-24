@@ -249,6 +249,10 @@ export interface Repository {
   ): Promise<PropertySourceRecord | null>;
   getPropertySource(id: string): Promise<PropertySourceRecord | null>;
   listPropertySources(propertyId: string): Promise<PropertySourceRecord[]>;
+  updatePropertySource(
+    id: string,
+    data: Partial<PropertySourceRecord>,
+  ): Promise<PropertySourceRecord | null>;
   deletePropertySource(sourceId: string): Promise<boolean>;
   listWatchLists(): Promise<WatchListRecord[]>;
   createWatchList(data: {

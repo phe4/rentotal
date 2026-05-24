@@ -1,9 +1,14 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import type { BrowserCollector } from "../src/collectors/browserCollector.js";
+import {
+  detectJsonEndpointCandidate,
+  type BrowserCollector,
+} from "../src/collectors/browserCollector.js";
+import type { DirectJsonCollector } from "../src/collectors/directJsonCollector.js";
 import { InMemoryRepository } from "../src/db/inMemoryRepository.js";
 import { genericHtmlRentParser } from "../src/parsers/genericHtmlRentParser.js";
+import { parseGenericJsonRent } from "../src/parsers/genericJsonRentParser.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
 import type { PriceSnapshotRecord } from "../src/types.js";
 
@@ -772,6 +777,260 @@ describe("Phase 4 browser fallback", () => {
       .get("/api/alerts?alertType=SCRAPE_FAILED")
       .expect(200);
     expect(alerts.body).toHaveLength(1);
+  });
+});
+
+describe("Phase 5 direct JSON discovery", () => {
+  async function createSource(metadata?: Record<string, unknown>) {
+    const property = await request(app)
+      .post("/api/properties")
+      .send({ name: "Phase 5 Target" })
+      .expect(201);
+    const source = await request(app)
+      .post(`/api/properties/${property.body.id}/sources`)
+      .send({
+        sourceType: "OFFICIAL_SITE",
+        sourceUrl: "https://example.com/dynamic",
+        metadata,
+      })
+      .expect(201);
+    return { property: property.body, source: source.body };
+  }
+
+  function appWithCollectors(options: {
+    directJsonCollector?: DirectJsonCollector;
+    browserCollector?: BrowserCollector;
+  }) {
+    app = createApp(repository, {
+      scrapeService: {
+        enableBrowserFallback: true,
+        ...options,
+      },
+    });
+  }
+
+  it("uses direct JSON first when preferred endpoint metadata exists", async () => {
+    const directJsonCollector = vi.fn<DirectJsonCollector>(
+      async (endpoint) => ({
+        url: endpoint.url,
+        statusCode: 200,
+        contentType: "application/json",
+        text: JSON.stringify({
+          units: [{ unitNumber: "301", rent: 2450, beds: 1, baths: 1 }],
+        }),
+        json: { units: [{ unitNumber: "301", rent: 2450, beds: 1, baths: 1 }] },
+        contentHash: "json-rent",
+      }),
+    );
+    const browserCollector = vi.fn<BrowserCollector>();
+    appWithCollectors({ directJsonCollector, browserCollector });
+    const { property, source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: "https://example.com/api/availability",
+        method: "GET",
+        contentType: "application/json",
+      },
+    });
+    mockFetch(200, "<p>Rent: $2,999</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(directJsonCollector).toHaveBeenCalledTimes(1);
+    expect(browserCollector).not.toHaveBeenCalled();
+    expect(response.body.run.crawlerTier).toBe("DIRECT_JSON");
+    expect(response.body.priceSnapshots[0].baseRent).toBe(2450);
+
+    const latest = await request(app)
+      .get(`/api/properties/${property.id}/latest-price`)
+      .expect(200);
+    expect(latest.body.baseRent).toBe(2450);
+  });
+
+  it("direct JSON no-rent response falls back to HTTP/browser path", async () => {
+    const directJsonCollector = vi.fn<DirectJsonCollector>(
+      async (endpoint) => ({
+        url: endpoint.url,
+        statusCode: 200,
+        contentType: "application/json",
+        text: JSON.stringify({ build: 123, featureFlags: [1, 2, 3] }),
+        json: { build: 123, featureFlags: [1, 2, 3] },
+        contentHash: "json-no-rent",
+      }),
+    );
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,650</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+    }));
+    appWithCollectors({ directJsonCollector, browserCollector });
+    const { source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: "https://example.com/api/config",
+        method: "GET",
+      },
+    });
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("BROWSER");
+    expect(response.body.priceSnapshots[0].baseRent).toBe(2650);
+    expect(browserCollector).toHaveBeenCalledTimes(1);
+  });
+
+  it("direct JSON HTTP failure falls back to HTTP/browser path", async () => {
+    const directJsonCollector = vi.fn<DirectJsonCollector>(async () => {
+      throw new Error("HTTP 500");
+    });
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,700</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+    }));
+    appWithCollectors({ directJsonCollector, browserCollector });
+    const { source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: "https://example.com/api/availability",
+        method: "GET",
+      },
+    });
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("BROWSER");
+    expect(response.body.priceSnapshots[0].baseRent).toBe(2700);
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=SCRAPE_FAILED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("browser fallback saves candidate JSON endpoint metadata", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,800</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+      jsonCandidates: [
+        {
+          url: "https://example.com/api/availability",
+          method: "GET",
+          contentType: "application/json",
+          confidence: 0.84,
+          reason: "JSON response contained rent and floorplan-like keys",
+          discoveredAt: "2026-05-24T00:00:00.000Z",
+          sample: { rent: 2800, token: "do-not-store" },
+        },
+      ],
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource({ existingMetadata: "preserve-me" });
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+      existingMetadata?: string;
+    };
+    expect(metadata.directJsonCandidates?.[0]?.url).toBe(
+      "https://example.com/api/availability",
+    );
+    expect(metadata.directJsonCandidates?.[0]?.sample).toBeUndefined();
+    expect(metadata.preferredDirectJsonEndpoint?.url).toBe(
+      "https://example.com/api/availability",
+    );
+    expect(metadata.existingMetadata).toBe("preserve-me");
+  });
+
+  it("does not promote low-confidence browser JSON candidates", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,800</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+      jsonCandidates: [
+        {
+          url: "https://example.com/api/maybe",
+          method: "GET",
+          contentType: "application/json",
+          confidence: 0.45,
+          reason: "Low confidence candidate",
+          discoveredAt: "2026-05-24T00:00:00.000Z",
+          sample: { rent: 2800, apiKey: "do-not-store" },
+        },
+      ],
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource();
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+    } | null;
+    expect(metadata?.directJsonCandidates).toBeUndefined();
+    expect(metadata?.preferredDirectJsonEndpoint).toBeUndefined();
+  });
+
+  it("candidate metadata excludes obvious analytics endpoints", () => {
+    const candidate = detectJsonEndpointCandidate({
+      url: "https://example.com/analytics/collect",
+      contentType: "application/json",
+      json: { rent: 2500, floorPlanName: "A1", availability: true },
+    });
+
+    expect(candidate).toBeNull();
+  });
+
+  it("generic JSON parser creates rent items and avoids unrelated numbers", () => {
+    const parsed = parseGenericJsonRent({
+      floorplans: [
+        {
+          floorPlanName: "A1",
+          unitNumber: "301",
+          marketRent: 2550,
+          bedrooms: 1,
+          bathrooms: 1,
+          squareFeet: 750,
+          available: true,
+        },
+      ],
+    });
+    const unrelated = parseGenericJsonRent({
+      analytics: { version: 42, build: 20260524, retries: 3 },
+    });
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.baseRent).toBe(2550);
+    expect(parsed[0]?.floorplanName).toBe("A1");
+    expect(unrelated).toHaveLength(0);
   });
 });
 

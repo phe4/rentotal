@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import type {
   AlertRecord,
   PriceSnapshotRecord,
@@ -116,6 +116,31 @@ export class PrismaRepository implements Repository {
       where: { propertyId },
       orderBy: { createdAt: "desc" },
     });
+  }
+
+  async updatePropertySource(
+    id: string,
+    data: Partial<PropertySourceRecord>,
+  ): Promise<PropertySourceRecord | null> {
+    try {
+      return await this.prisma.propertySource.update({
+        where: { id },
+        data: withoutUndefined({
+          sourceType: data.sourceType,
+          sourceUrl: data.sourceUrl,
+          sourceExternalId: data.sourceExternalId,
+          isPrimary: data.isPrimary,
+          metadata:
+            data.metadata === undefined
+              ? undefined
+              : data.metadata === null
+                ? Prisma.JsonNull
+                : (data.metadata as Prisma.InputJsonValue),
+        }),
+      });
+    } catch {
+      return null;
+    }
   }
 
   async deletePropertySource(sourceId: string): Promise<boolean> {

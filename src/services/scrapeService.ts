@@ -7,9 +7,17 @@ import {
   collectBrowserPage,
   type BrowserCollectedPage,
   type BrowserCollector,
+  type JsonEndpointCandidate,
 } from "../collectors/browserCollector.js";
+import {
+  createDirectJsonCollector,
+  type DirectJsonCollector,
+  type DirectJsonEndpoint,
+  type DirectJsonPage,
+} from "../collectors/directJsonCollector.js";
 import type { ParsedPriceItem, PriceParser } from "../parsers/priceParser.js";
 import { genericHtmlRentParser } from "../parsers/genericHtmlRentParser.js";
+import { parseGenericJsonRent } from "../parsers/genericJsonRentParser.js";
 import { calculateEffectiveRent } from "./effectiveRent.js";
 import type {
   AlertType,
@@ -21,6 +29,11 @@ import type {
 } from "../types.js";
 
 const RAW_TEXT_LIMIT = 10_000;
+const RAW_JSON_DEPTH_LIMIT = 3;
+const RAW_JSON_ARRAY_LIMIT = 5;
+const RAW_JSON_OBJECT_LIMIT = 20;
+const RAW_JSON_STRING_LIMIT = 2_000;
+const MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE = 0.6;
 const ACTIVE_WATCH_STATUSES = new Set([
   "WATCHING",
   "CONTACTED",
@@ -32,6 +45,7 @@ export type ScrapeServiceOptions = {
   parser?: PriceParser;
   fetcher?: FetchLike;
   browserCollector?: BrowserCollector;
+  directJsonCollector?: DirectJsonCollector;
   enableBrowserFallback?: boolean;
   browserTimeoutMs?: number;
 };
@@ -61,6 +75,7 @@ export class ScrapeService {
   private parser: PriceParser;
   private fetcher?: FetchLike;
   private browserCollector: BrowserCollector;
+  private directJsonCollector: DirectJsonCollector;
   private enableBrowserFallback: boolean;
   private browserTimeoutMs: number;
 
@@ -71,6 +86,8 @@ export class ScrapeService {
     this.parser = options.parser ?? genericHtmlRentParser;
     this.fetcher = options.fetcher;
     this.browserCollector = options.browserCollector ?? collectBrowserPage;
+    this.directJsonCollector =
+      options.directJsonCollector ?? createDirectJsonCollector(options.fetcher);
     this.enableBrowserFallback =
       options.enableBrowserFallback ??
       envFlag("ENABLE_BROWSER_FALLBACK", false);
@@ -115,6 +132,14 @@ export class ScrapeService {
     source: PropertySourceRecord | null,
     task: ScrapeTaskRecord | null,
   ): Promise<{ run: ScrapeRunRecord; priceSnapshots: PriceSnapshotRecord[] }> {
+    if (source) {
+      const endpoint = preferredDirectJsonEndpoint(source.metadata);
+      if (endpoint) {
+        const directResult = await this.runDirectJson(source, task, endpoint);
+        if (directResult.run.status === "SUCCEEDED") return directResult;
+      }
+    }
+
     const startedAt = new Date();
     const run = await this.repository.createScrapeRun({
       taskId: task?.id ?? null,
@@ -200,6 +225,70 @@ export class ScrapeService {
     }
   }
 
+  private async runDirectJson(
+    source: PropertySourceRecord,
+    task: ScrapeTaskRecord | null,
+    endpoint: DirectJsonEndpoint,
+  ): Promise<{ run: ScrapeRunRecord; priceSnapshots: PriceSnapshotRecord[] }> {
+    const startedAt = new Date();
+    const run = await this.repository.createScrapeRun({
+      taskId: task?.id ?? null,
+      propertyId: source.propertyId,
+      sourceId: source.id,
+      crawlerTier: "DIRECT_JSON",
+      status: "PARTIAL",
+      startedAt,
+      finishedAt: null,
+      durationMs: null,
+      httpStatus: null,
+      contentHash: null,
+      itemsFound: null,
+      rawStorageUrl: null,
+      errorMessage: null,
+    });
+
+    try {
+      const page = await this.directJsonCollector(endpoint);
+      await this.saveRawPage(run, source, page);
+      const parsedItems = parseGenericJsonRent(page.json);
+      const finishedAt = new Date();
+
+      if (parsedItems.length === 0) {
+        await this.createNeedsReviewAlert(source);
+        const updatedRun = await this.repository.updateScrapeRun(run.id, {
+          status: "PARTIAL",
+          finishedAt,
+          durationMs: durationMs(startedAt, finishedAt),
+          httpStatus: page.statusCode ?? null,
+          contentHash: page.contentHash,
+          itemsFound: 0,
+          errorMessage: "No rent data was parsed from direct JSON response.",
+        });
+        return { run: updatedRun ?? run, priceSnapshots: [] };
+      }
+
+      const snapshots = await this.saveParsedSnapshots(
+        source,
+        parsedItems,
+        finishedAt,
+      );
+      const updatedRun = await this.repository.updateScrapeRun(run.id, {
+        status: "SUCCEEDED",
+        finishedAt,
+        durationMs: durationMs(startedAt, finishedAt),
+        httpStatus: page.statusCode ?? null,
+        contentHash: page.contentHash,
+        itemsFound: parsedItems.length,
+        errorMessage: null,
+      });
+      return { run: updatedRun ?? run, priceSnapshots: snapshots };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Direct JSON scrape failed.";
+      return this.failRun(run, startedAt, message);
+    }
+  }
+
   private async runBrowserFallback(
     source: PropertySourceRecord,
     task: ScrapeTaskRecord | null,
@@ -226,6 +315,7 @@ export class ScrapeService {
         timeoutMs: this.browserTimeoutMs,
       });
       await this.saveRawPage(run, source, page);
+      await this.saveJsonCandidates(source, page.jsonCandidates);
       const parsedItems = this.parser.parse({
         url: page.url,
         text: page.text,
@@ -273,7 +363,7 @@ export class ScrapeService {
   private async saveRawPage(
     run: ScrapeRunRecord,
     source: PropertySourceRecord,
-    page: CollectedPage | BrowserCollectedPage,
+    page: CollectedPage | BrowserCollectedPage | DirectJsonPage,
   ): Promise<void> {
     await this.repository.createRawPage({
       scrapeRunId: run.id,
@@ -283,8 +373,53 @@ export class ScrapeService {
       contentType: page.contentType ?? null,
       contentHash: page.contentHash,
       rawText: sanitizeRawText(page.text),
-      rawJson: "rendered" in page ? { rendered: page.rendered } : null,
+      rawJson: rawJsonForPage(page),
       rawHtmlStorageUrl: null,
+    });
+  }
+
+  private async saveJsonCandidates(
+    source: PropertySourceRecord,
+    candidates: JsonEndpointCandidate[] | undefined,
+  ): Promise<void> {
+    const confidentCandidates = candidates?.filter(
+      (candidate) =>
+        candidate.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE,
+    );
+    if (!confidentCandidates || confidentCandidates.length === 0) return;
+    const metadata = metadataObject(source.metadata);
+    const existing = Array.isArray(metadata.directJsonCandidates)
+      ? metadata.directJsonCandidates
+      : [];
+    const merged = [...existing];
+    for (const candidate of confidentCandidates) {
+      if (
+        !merged.some((item) => isObject(item) && item.url === candidate.url)
+      ) {
+        merged.push(candidate);
+      }
+    }
+    const best = [...confidentCandidates].sort(
+      (a, b) => b.confidence - a.confidence,
+    )[0];
+    const preferred =
+      isObject(metadata.preferredDirectJsonEndpoint) &&
+      typeof metadata.preferredDirectJsonEndpoint.confidence === "number" &&
+      (!best ||
+        metadata.preferredDirectJsonEndpoint.confidence >= best.confidence)
+        ? metadata.preferredDirectJsonEndpoint
+        : best
+          ? withoutSample(best)
+          : metadata.preferredDirectJsonEndpoint;
+
+    await this.repository.updatePropertySource(source.id, {
+      metadata: {
+        ...metadata,
+        directJsonCandidates: merged.map((candidate) =>
+          isObject(candidate) ? withoutSample(candidate) : candidate,
+        ),
+        preferredDirectJsonEndpoint: preferred,
+      },
     });
   }
 
@@ -591,4 +726,75 @@ function nullable(value: string | null | undefined): string {
 
 function dateValue(value: Date | null | undefined): number | null {
   return value?.getTime() ?? null;
+}
+
+function rawJsonForPage(
+  page: CollectedPage | BrowserCollectedPage | DirectJsonPage,
+): unknown {
+  if ("json" in page) return sanitizeJsonSample(page.json);
+  if ("rendered" in page) {
+    return {
+      rendered: page.rendered,
+      jsonCandidates: page.jsonCandidates?.map(withoutSample),
+    };
+  }
+  return null;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function metadataObject(value: unknown): Record<string, unknown> {
+  return isObject(value) ? value : {};
+}
+
+function withoutSample<T extends Record<string, unknown>>(
+  value: T,
+): Omit<T, "sample"> {
+  const { sample: _sample, ...rest } = value;
+  return rest;
+}
+
+function sanitizeJsonSample(value: unknown, depth = 0): unknown {
+  if (depth > RAW_JSON_DEPTH_LIMIT) return null;
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, RAW_JSON_ARRAY_LIMIT)
+      .map((item) => sanitizeJsonSample(item, depth + 1));
+  }
+  if (typeof value === "string") return value.slice(0, RAW_JSON_STRING_LIMIT);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(
+        ([key]) =>
+          !/token|cookie|password|secret|session|auth|authorization|api[-_]?key|access[-_]?key/i.test(
+            key,
+          ),
+      )
+      .slice(0, RAW_JSON_OBJECT_LIMIT)
+      .map(([key, item]) => [key, sanitizeJsonSample(item, depth + 1)]),
+  );
+}
+
+function preferredDirectJsonEndpoint(
+  metadata: unknown,
+): DirectJsonEndpoint | null {
+  const value = metadataObject(metadata).preferredDirectJsonEndpoint;
+  if (!isObject(value) || typeof value.url !== "string") return null;
+  try {
+    const url = new URL(value.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  } catch {
+    return null;
+  }
+  const method = typeof value.method === "string" ? value.method : "GET";
+  if (method !== "GET") return null;
+  return {
+    url: value.url,
+    method,
+    contentType:
+      typeof value.contentType === "string" ? value.contentType : undefined,
+  };
 }

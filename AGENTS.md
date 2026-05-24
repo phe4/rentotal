@@ -22,7 +22,7 @@ Build only:
 - price history/latest price APIs
 - basic stored alert generation and deduplication
 - Playwright fallback for dynamic pages
-- direct JSON endpoint discovery planning
+- direct JSON endpoint discovery
 
 Do not implement later phases unless explicitly requested.
 
