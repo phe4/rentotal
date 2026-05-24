@@ -7,8 +7,12 @@ import { scrapingRouter } from "./routes/scraping.js";
 import { watchIntakesRouter } from "./routes/watchIntakes.js";
 import { watchItemsRouter } from "./routes/watchItems.js";
 import { watchListsRouter } from "./routes/watchLists.js";
+import type { ScrapeServiceOptions } from "./services/scrapeService.js";
 
-export function createApp(repository: Repository) {
+export function createApp(
+  repository: Repository,
+  options: { scrapeService?: ScrapeServiceOptions } = {},
+) {
   const app = express();
 
   app.use(cors());
@@ -20,7 +24,7 @@ export function createApp(repository: Repository) {
 
   const api = express.Router();
   api.use(propertiesRouter(repository));
-  api.use(scrapingRouter(repository));
+  api.use(scrapingRouter(repository, options.scrapeService));
   api.use(watchListsRouter(repository));
   api.use(watchItemsRouter(repository));
   api.use(watchIntakesRouter(repository));

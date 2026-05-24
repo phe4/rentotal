@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import type { BrowserCollector } from "../src/collectors/browserCollector.js";
 import { InMemoryRepository } from "../src/db/inMemoryRepository.js";
 import { genericHtmlRentParser } from "../src/parsers/genericHtmlRentParser.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
@@ -623,6 +624,154 @@ describe("Phase 3 price snapshots and alerts", () => {
     expect(
       history.body.map((snapshot: PriceSnapshotRecord) => snapshot.baseRent),
     ).toEqual([2200, 2400]);
+  });
+});
+
+describe("Phase 4 browser fallback", () => {
+  async function createSource(sourceUrl = "https://example.com/dynamic") {
+    const property = await request(app)
+      .post("/api/properties")
+      .send({ name: "Phase 4 Target" })
+      .expect(201);
+    const source = await request(app)
+      .post(`/api/properties/${property.body.id}/sources`)
+      .send({ sourceType: "OFFICIAL_SITE", sourceUrl })
+      .expect(201);
+    return { property: property.body, source: source.body };
+  }
+
+  function enableBrowserFallback(browserCollector: BrowserCollector) {
+    app = createApp(repository, {
+      scrapeService: {
+        enableBrowserFallback: true,
+        browserCollector,
+      },
+    });
+  }
+
+  it("does not call browser fallback when HTTP parser succeeds", async () => {
+    const browserCollector = vi.fn<BrowserCollector>();
+    enableBrowserFallback(browserCollector);
+    const { source } = await createSource();
+    mockFetch(200, "<p>Rent: $2,500</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("HTTP");
+    expect(response.body.priceSnapshots).toHaveLength(1);
+    expect(browserCollector).not.toHaveBeenCalled();
+  });
+
+  it("does not call browser fallback when HTTP collection fails", async () => {
+    const browserCollector = vi.fn<BrowserCollector>();
+    enableBrowserFallback(browserCollector);
+    const { source } = await createSource();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("HTTP");
+    expect(response.body.run.status).toBe("FAILED");
+    expect(response.body.run.errorMessage).toBe("network down");
+    expect(browserCollector).not.toHaveBeenCalled();
+  });
+
+  it("calls browser fallback when HTTP parser finds no rent", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,750</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+    }));
+    enableBrowserFallback(browserCollector);
+    const { property, source } = await createSource();
+    mockFetch(200, "<p>Loading availability...</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(browserCollector).toHaveBeenCalledTimes(1);
+    expect(response.body.run.crawlerTier).toBe("BROWSER");
+    expect(response.body.run.status).toBe("SUCCEEDED");
+    expect(response.body.priceSnapshots[0].baseRent).toBe(2750);
+
+    const runs = await request(app).get("/api/scrape-runs").expect(200);
+    const crawlerTiers = runs.body.map(
+      (run: { crawlerTier: string }) => run.crawlerTier,
+    );
+    expect(crawlerTiers).toContain("HTTP");
+    expect(crawlerTiers).toContain("BROWSER");
+
+    const snapshots = await request(app)
+      .get(`/api/properties/${property.id}/price-snapshots`)
+      .expect(200);
+    expect(snapshots.body).toHaveLength(1);
+  });
+
+  it("browser fallback with no rent creates NEEDS_REVIEW and no fake snapshot", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered page still says call for availability.</p>",
+      contentHash: "browser-no-rent",
+      rendered: true,
+    }));
+    enableBrowserFallback(browserCollector);
+    const { property, source } = await createSource();
+    mockFetch(200, "<p>Loading availability...</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("BROWSER");
+    expect(response.body.run.status).toBe("PARTIAL");
+    expect(response.body.priceSnapshots).toHaveLength(0);
+
+    const snapshots = await request(app)
+      .get(`/api/properties/${property.id}/price-snapshots`)
+      .expect(200);
+    expect(snapshots.body).toHaveLength(0);
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=NEEDS_REVIEW")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
+  });
+
+  it("browser failure creates SCRAPE_FAILED", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async () => {
+      throw new Error("browser timeout");
+    });
+    enableBrowserFallback(browserCollector);
+    const { source } = await createSource();
+    mockFetch(200, "<p>Loading availability...</p>");
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("BROWSER");
+    expect(response.body.run.status).toBe("FAILED");
+    expect(response.body.run.errorMessage).toBe("browser timeout");
+
+    const alerts = await request(app)
+      .get("/api/alerts?alertType=SCRAPE_FAILED")
+      .expect(200);
+    expect(alerts.body).toHaveLength(1);
   });
 });
 

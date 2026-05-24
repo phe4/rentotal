@@ -1,7 +1,13 @@
 import {
   collectHttpPage,
+  type CollectedPage,
   type FetchLike,
 } from "../collectors/httpCollector.js";
+import {
+  collectBrowserPage,
+  type BrowserCollectedPage,
+  type BrowserCollector,
+} from "../collectors/browserCollector.js";
 import type { ParsedPriceItem, PriceParser } from "../parsers/priceParser.js";
 import { genericHtmlRentParser } from "../parsers/genericHtmlRentParser.js";
 import { calculateEffectiveRent } from "./effectiveRent.js";
@@ -21,6 +27,14 @@ const ACTIVE_WATCH_STATUSES = new Set([
   "TOURED",
   "APPLIED",
 ]);
+
+export type ScrapeServiceOptions = {
+  parser?: PriceParser;
+  fetcher?: FetchLike;
+  browserCollector?: BrowserCollector;
+  enableBrowserFallback?: boolean;
+  browserTimeoutMs?: number;
+};
 
 function isHttpUrl(value: string | null): value is string {
   if (!value) return false;
@@ -44,11 +58,25 @@ function durationMs(startedAt: Date, finishedAt: Date): number {
 }
 
 export class ScrapeService {
+  private parser: PriceParser;
+  private fetcher?: FetchLike;
+  private browserCollector: BrowserCollector;
+  private enableBrowserFallback: boolean;
+  private browserTimeoutMs: number;
+
   constructor(
     private repository: Repository,
-    private parser: PriceParser = genericHtmlRentParser,
-    private fetcher?: FetchLike,
-  ) {}
+    options: ScrapeServiceOptions = {},
+  ) {
+    this.parser = options.parser ?? genericHtmlRentParser;
+    this.fetcher = options.fetcher;
+    this.browserCollector = options.browserCollector ?? collectBrowserPage;
+    this.enableBrowserFallback =
+      options.enableBrowserFallback ??
+      envFlag("ENABLE_BROWSER_FALLBACK", false);
+    this.browserTimeoutMs =
+      options.browserTimeoutMs ?? envNumber("BROWSER_TIMEOUT_MS", 15_000);
+  }
 
   async runTask(taskId: string): Promise<{
     run: ScrapeRunRecord;
@@ -122,17 +150,7 @@ export class ScrapeService {
 
     try {
       const page = await collectHttpPage(source.sourceUrl, this.fetcher);
-      await this.repository.createRawPage({
-        scrapeRunId: run.id,
-        propertyId: source.propertyId,
-        sourceId: source.id,
-        url: page.url,
-        contentType: page.contentType ?? null,
-        contentHash: page.contentHash,
-        rawText: sanitizeRawText(page.text),
-        rawJson: null,
-        rawHtmlStorageUrl: null,
-      });
+      await this.saveRawPage(run, source, page);
 
       const parsedItems = this.parser.parse({
         url: page.url,
@@ -142,15 +160,7 @@ export class ScrapeService {
       const finishedAt = new Date();
 
       if (parsedItems.length === 0) {
-        await this.createAlertOnce({
-          propertyId: source.propertyId,
-          watchListItemId: null,
-          alertType: "NEEDS_REVIEW",
-          title: "Scrape needs review",
-          message: `No rent patterns were parsed for source ${source.id}.`,
-          severity: "WARNING",
-        });
-        const updatedRun = await this.repository.updateScrapeRun(run.id, {
+        await this.repository.updateScrapeRun(run.id, {
           status: "PARTIAL",
           finishedAt,
           durationMs: durationMs(startedAt, finishedAt),
@@ -159,24 +169,19 @@ export class ScrapeService {
           itemsFound: 0,
           errorMessage: "No rent patterns were parsed from the HTTP response.",
         });
+        if (this.enableBrowserFallback) {
+          return this.runBrowserFallback(source, task);
+        }
+        await this.createNeedsReviewAlert(source);
+        const updatedRun = await this.repository.getScrapeRun(run.id);
         return { run: updatedRun ?? run, priceSnapshots: [] };
       }
 
-      const snapshots: PriceSnapshotRecord[] = [];
-      for (const item of parsedItems) {
-        const snapshotData = this.normalizeSnapshotItem(
-          source,
-          item,
-          finishedAt,
-        );
-        const previous = await this.findPreviousRelevantSnapshot(snapshotData);
-        if (previous && trackedValuesEqual(previous, snapshotData)) continue;
-
-        await this.createChangeAlerts(snapshotData, previous);
-        await this.createBudgetAlerts(snapshotData);
-
-        snapshots.push(await this.repository.createPriceSnapshot(snapshotData));
-      }
+      const snapshots = await this.saveParsedSnapshots(
+        source,
+        parsedItems,
+        finishedAt,
+      );
 
       const updatedRun = await this.repository.updateScrapeRun(run.id, {
         status: "SUCCEEDED",
@@ -193,6 +198,113 @@ export class ScrapeService {
         error instanceof Error ? error.message : "HTTP scrape failed.";
       return this.failRun(run, startedAt, message);
     }
+  }
+
+  private async runBrowserFallback(
+    source: PropertySourceRecord,
+    task: ScrapeTaskRecord | null,
+  ): Promise<{ run: ScrapeRunRecord; priceSnapshots: PriceSnapshotRecord[] }> {
+    const startedAt = new Date();
+    const run = await this.repository.createScrapeRun({
+      taskId: task?.id ?? null,
+      propertyId: source.propertyId,
+      sourceId: source.id,
+      crawlerTier: "BROWSER",
+      status: "PARTIAL",
+      startedAt,
+      finishedAt: null,
+      durationMs: null,
+      httpStatus: null,
+      contentHash: null,
+      itemsFound: null,
+      rawStorageUrl: null,
+      errorMessage: null,
+    });
+
+    try {
+      const page = await this.browserCollector(source.sourceUrl!, {
+        timeoutMs: this.browserTimeoutMs,
+      });
+      await this.saveRawPage(run, source, page);
+      const parsedItems = this.parser.parse({
+        url: page.url,
+        text: page.text,
+        contentType: page.contentType,
+      });
+      const finishedAt = new Date();
+
+      if (parsedItems.length === 0) {
+        await this.createNeedsReviewAlert(source);
+        const updatedRun = await this.repository.updateScrapeRun(run.id, {
+          status: "PARTIAL",
+          finishedAt,
+          durationMs: durationMs(startedAt, finishedAt),
+          httpStatus: page.statusCode ?? null,
+          contentHash: page.contentHash,
+          itemsFound: 0,
+          errorMessage:
+            "No rent patterns were parsed from rendered browser content.",
+        });
+        return { run: updatedRun ?? run, priceSnapshots: [] };
+      }
+
+      const snapshots = await this.saveParsedSnapshots(
+        source,
+        parsedItems,
+        finishedAt,
+      );
+      const updatedRun = await this.repository.updateScrapeRun(run.id, {
+        status: "SUCCEEDED",
+        finishedAt,
+        durationMs: durationMs(startedAt, finishedAt),
+        httpStatus: page.statusCode ?? null,
+        contentHash: page.contentHash,
+        itemsFound: parsedItems.length,
+        errorMessage: null,
+      });
+      return { run: updatedRun ?? run, priceSnapshots: snapshots };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Browser scrape failed.";
+      return this.failRun(run, startedAt, message);
+    }
+  }
+
+  private async saveRawPage(
+    run: ScrapeRunRecord,
+    source: PropertySourceRecord,
+    page: CollectedPage | BrowserCollectedPage,
+  ): Promise<void> {
+    await this.repository.createRawPage({
+      scrapeRunId: run.id,
+      propertyId: source.propertyId,
+      sourceId: source.id,
+      url: page.url,
+      contentType: page.contentType ?? null,
+      contentHash: page.contentHash,
+      rawText: sanitizeRawText(page.text),
+      rawJson: "rendered" in page ? { rendered: page.rendered } : null,
+      rawHtmlStorageUrl: null,
+    });
+  }
+
+  private async saveParsedSnapshots(
+    source: PropertySourceRecord,
+    parsedItems: ParsedPriceItem[],
+    scrapedAt: Date,
+  ): Promise<PriceSnapshotRecord[]> {
+    const snapshots: PriceSnapshotRecord[] = [];
+    for (const item of parsedItems) {
+      const snapshotData = this.normalizeSnapshotItem(source, item, scrapedAt);
+      const previous = await this.findPreviousRelevantSnapshot(snapshotData);
+      if (previous && trackedValuesEqual(previous, snapshotData)) continue;
+
+      await this.createChangeAlerts(snapshotData, previous);
+      await this.createBudgetAlerts(snapshotData);
+
+      snapshots.push(await this.repository.createPriceSnapshot(snapshotData));
+    }
+    return snapshots;
   }
 
   private async failRun(
@@ -395,6 +507,32 @@ export class ScrapeService {
     if (duplicate) return;
     await this.repository.createAlert(data);
   }
+
+  private async createNeedsReviewAlert(
+    source: PropertySourceRecord,
+  ): Promise<void> {
+    await this.createAlertOnce({
+      propertyId: source.propertyId,
+      watchListItemId: null,
+      alertType: "NEEDS_REVIEW",
+      title: "Scrape needs review",
+      message: `No rent patterns were parsed for source ${source.id}.`,
+      severity: "WARNING",
+    });
+  }
+}
+
+function envFlag(name: string, defaultValue: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined) return defaultValue;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function envNumber(name: string, defaultValue: number): number {
+  const value = process.env[name];
+  if (!value) return defaultValue;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
 }
 
 function deriveSpecialOfferValue(

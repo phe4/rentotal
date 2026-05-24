@@ -1,7 +1,10 @@
 import { Router } from "express";
 import type { Repository } from "../types.js";
 import { watchPriorities } from "../types.js";
-import { ScrapeService } from "../services/scrapeService.js";
+import {
+  ScrapeService,
+  type ScrapeServiceOptions,
+} from "../services/scrapeService.js";
 import { HttpError, sendError } from "../validation/http.js";
 import {
   enumValue,
@@ -10,9 +13,12 @@ import {
 } from "../validation/index.js";
 import { readBody } from "./helpers.js";
 
-export function scrapingRouter(repository: Repository): Router {
+export function scrapingRouter(
+  repository: Repository,
+  scrapeServiceOptions: ScrapeServiceOptions = {},
+): Router {
   const router = Router();
-  const scrapeService = new ScrapeService(repository);
+  const scrapeService = new ScrapeService(repository, scrapeServiceOptions);
 
   router.post("/scrape-tasks", async (req, res) => {
     try {
@@ -33,14 +39,14 @@ export function scrapingRouter(repository: Repository): Router {
       if (crawlerTier !== "HTTP") {
         throw new HttpError(
           400,
-          "Only HTTP crawlerTier is supported in Phase 2.",
+          "Only HTTP scrape tasks are supported; browser scraping runs only as fallback.",
         );
       }
       const taskType = optionalString(body, "taskType") ?? "PRICE_CHECK";
       if (taskType !== "PRICE_CHECK") {
         throw new HttpError(
           400,
-          "Only PRICE_CHECK scrape tasks are supported in Phase 2.",
+          "Only PRICE_CHECK scrape tasks are supported in Phase 4.",
         );
       }
 

@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 3 - Price snapshots, effective rent, and alerts.
+Current phase: Phase 5 - Direct JSON endpoint discovery.
 
 Build only:
 
@@ -21,6 +21,8 @@ Build only:
 - effective rent calculation
 - price history/latest price APIs
 - basic stored alert generation and deduplication
+- Playwright fallback for dynamic pages
+- direct JSON endpoint discovery planning
 
 Do not implement later phases unless explicitly requested.
 
