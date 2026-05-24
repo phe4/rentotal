@@ -106,6 +106,64 @@ describe("Phase 1 API", () => {
     expect(sources[0]?.sourceType).toBe("FLOORPLAN_URL");
   });
 
+  it("creates a property source from URL-like inputValue when sourceUrl is omitted", async () => {
+    const inputValue = "https://www.fairwayglen.com/floor-plans?utm_knock=g";
+    const response = await request(app)
+      .post("/api/watch-items")
+      .send({
+        inputType: "FLOORPLAN_URL",
+        inputValue,
+        name: "Manual Test Apartment",
+        targetBedrooms: 1,
+        targetBathrooms: 1,
+        targetBudgetMax: 2900,
+      })
+      .expect(201);
+
+    const sources = await repository.listPropertySources(
+      response.body.propertyId,
+    );
+    const intakes = await repository.listWatchIntakes();
+    expect(sources).toHaveLength(1);
+    expect(sources[0]?.sourceType).toBe("FLOORPLAN_URL");
+    expect(sources[0]?.sourceUrl).toBe(inputValue);
+    expect(intakes[0]?.inputValue).toBe(inputValue);
+  });
+
+  it("does not create a property source from PROPERTY_NAME inputValue", async () => {
+    const response = await request(app)
+      .post("/api/watch-items")
+      .send({
+        inputType: "PROPERTY_NAME",
+        inputValue: "Manual Test Apartment",
+        targetBedrooms: 1,
+      })
+      .expect(201);
+
+    const sources = await repository.listPropertySources(
+      response.body.propertyId,
+    );
+    expect(sources).toHaveLength(0);
+  });
+
+  it("still creates a property source when explicit sourceUrl is provided", async () => {
+    const response = await request(app)
+      .post("/api/watch-items")
+      .send({
+        inputType: "PROPERTY_NAME",
+        inputValue: "Manual Test Apartment",
+        sourceUrl: "https://example.com/manual-test",
+      })
+      .expect(201);
+
+    const sources = await repository.listPropertySources(
+      response.body.propertyId,
+    );
+    expect(sources).toHaveLength(1);
+    expect(sources[0]?.sourceType).toBe("MANUAL");
+    expect(sources[0]?.sourceUrl).toBe("https://example.com/manual-test");
+  });
+
   it("creates a property source when a URL is added to an existing property watch item", async () => {
     const property = await request(app)
       .post("/api/properties")
@@ -999,6 +1057,84 @@ describe("Phase 5 direct JSON discovery", () => {
     expect(metadata?.preferredDirectJsonEndpoint).toBeUndefined();
   });
 
+  it("stores community-only candidates without making them preferred", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,800</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+      jsonCandidates: [
+        {
+          url: "https://doorway-api.knockrentals.com/v1/property/community/2bc7dc811ebd5f29",
+          method: "GET",
+          contentType: "application/json",
+          confidence: 0.9,
+          reason: "JSON response contained rent and floorplan-like keys",
+          discoveredAt: "2026-05-24T00:00:00.000Z",
+          sample: { floorplans: [{ rent: 2800, floorPlanName: "A1" }] },
+        },
+      ],
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource();
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+    };
+    expect(metadata.directJsonCandidates?.[0]?.url).toBe(
+      "https://doorway-api.knockrentals.com/v1/property/community/2bc7dc811ebd5f29",
+    );
+    expect(metadata.preferredDirectJsonEndpoint).toBeUndefined();
+  });
+
+  it("passes post-load wait timing to browser fallback for late JSON capture", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url, options) => {
+      expect(options?.postLoadWaitMs).toBe(3000);
+      return {
+        url,
+        statusCode: 200,
+        contentType: "text/html",
+        text: "<p>Rendered rent: $2,800</p>",
+        contentHash: "browser-rent",
+        rendered: true,
+        jsonCandidates: [
+          {
+            url: "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+            method: "GET",
+            contentType: "application/json",
+            confidence: 0.76,
+            reason: "JSON response contained rent and floorplan-like keys",
+            discoveredAt: "2026-05-24T00:00:00.000Z",
+          },
+        ],
+      };
+    });
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource();
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+    };
+    expect(metadata.preferredDirectJsonEndpoint?.url).toBe(
+      "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+    );
+  });
+
   it("candidate metadata excludes obvious analytics endpoints", () => {
     const candidate = detectJsonEndpointCandidate({
       url: "https://example.com/analytics/collect",
@@ -1007,6 +1143,98 @@ describe("Phase 5 direct JSON discovery", () => {
     });
 
     expect(candidate).toBeNull();
+  });
+
+  it("candidate metadata excludes cookie and feature-flag endpoints", () => {
+    const json = { rent: 2500, floorPlanName: "A1", availability: true };
+    const cookieLaw = detectJsonEndpointCandidate({
+      url: "https://cdn.cookielaw.org/consent/abc/en.json",
+      contentType: "application/json",
+      json,
+    });
+    const launchDarkly = detectJsonEndpointCandidate({
+      url: "https://app.launchdarkly.com/sdk/evalx/project/context",
+      contentType: "application/json",
+      json,
+    });
+
+    expect(cookieLaw).toBeNull();
+    expect(launchDarkly).toBeNull();
+  });
+
+  it("prefers Fairway Glen-like units endpoint over generic property candidates", async () => {
+    const candidates = [
+      "https://cdn.cookielaw.org/consent/abc/en.json",
+      "https://doorway-api.knockrentals.com/v1/property/community/2bc7dc811ebd5f29",
+      "https://doorway-api.knockrentals.com/v1/profile?code=g&domain=&refresh=true",
+      "https://doorway-api.knockrentals.com/v1/property/2010930/phone-relays",
+      "https://doorway-api.knockrentals.com/v1/property/2010930",
+      "https://app.launchdarkly.com/sdk/evalx/project/context",
+      "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+    ].map((url) => ({
+      url,
+      method: "GET" as const,
+      contentType: "application/json",
+      confidence: url.endsWith("/units") ? 0.76 : 0.9,
+      reason: "JSON response contained rent and floorplan-like keys",
+      discoveredAt: "2026-05-24T00:00:00.000Z",
+      sample: { rent: 2800, floorPlanName: "A1", availability: true },
+    }));
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered rent: $2,800</p>",
+      contentHash: "browser-rent",
+      rendered: true,
+      jsonCandidates: candidates,
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource({
+      existingMetadata: "preserve-me",
+      directJsonCandidates: [
+        {
+          url: "https://cdn.cookielaw.org/consent/old/en.json",
+          method: "GET",
+          confidence: 0.95,
+        },
+      ],
+      preferredDirectJsonEndpoint: {
+        url: "https://doorway-api.knockrentals.com/v1/property/community/2bc7dc811ebd5f29",
+        method: "GET",
+        confidence: 0.9,
+      },
+    });
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+      existingMetadata?: string;
+    };
+    const urls =
+      metadata.directJsonCandidates?.map((candidate) =>
+        String(candidate.url),
+      ) ?? [];
+    expect(urls).toContain(
+      "https://doorway-api.knockrentals.com/v1/property/community/2bc7dc811ebd5f29",
+    );
+    expect(urls).toContain(
+      "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+    );
+    expect(urls.some((url) => url.includes("cookielaw"))).toBe(false);
+    expect(urls.some((url) => url.includes("launchdarkly"))).toBe(false);
+    expect(urls.some((url) => url.includes("phone-relays"))).toBe(false);
+    expect(urls.some((url) => url.includes("profile"))).toBe(false);
+    expect(metadata.preferredDirectJsonEndpoint?.url).toBe(
+      "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+    );
+    expect(metadata.existingMetadata).toBe("preserve-me");
   });
 
   it("generic JSON parser creates rent items and avoids unrelated numbers", () => {

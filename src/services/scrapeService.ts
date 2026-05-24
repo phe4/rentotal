@@ -8,6 +8,9 @@ import {
   type BrowserCollectedPage,
   type BrowserCollector,
   type JsonEndpointCandidate,
+  isHighValueJsonCandidateUrl,
+  isExcludedJsonCandidateUrl,
+  jsonCandidatePreferenceScore,
 } from "../collectors/browserCollector.js";
 import {
   createDirectJsonCollector,
@@ -48,6 +51,7 @@ export type ScrapeServiceOptions = {
   directJsonCollector?: DirectJsonCollector;
   enableBrowserFallback?: boolean;
   browserTimeoutMs?: number;
+  browserPostLoadWaitMs?: number;
 };
 
 function isHttpUrl(value: string | null): value is string {
@@ -78,6 +82,7 @@ export class ScrapeService {
   private directJsonCollector: DirectJsonCollector;
   private enableBrowserFallback: boolean;
   private browserTimeoutMs: number;
+  private browserPostLoadWaitMs: number;
 
   constructor(
     private repository: Repository,
@@ -93,6 +98,9 @@ export class ScrapeService {
       envFlag("ENABLE_BROWSER_FALLBACK", false);
     this.browserTimeoutMs =
       options.browserTimeoutMs ?? envNumber("BROWSER_TIMEOUT_MS", 15_000);
+    this.browserPostLoadWaitMs =
+      options.browserPostLoadWaitMs ??
+      envNumber("BROWSER_POST_LOAD_WAIT_MS", 3_000);
   }
 
   async runTask(taskId: string): Promise<{
@@ -313,6 +321,7 @@ export class ScrapeService {
     try {
       const page = await this.browserCollector(source.sourceUrl!, {
         timeoutMs: this.browserTimeoutMs,
+        postLoadWaitMs: this.browserPostLoadWaitMs,
       });
       await this.saveRawPage(run, source, page);
       await this.saveJsonCandidates(source, page.jsonCandidates);
@@ -386,40 +395,67 @@ export class ScrapeService {
       (candidate) =>
         candidate.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE,
     );
-    if (!confidentCandidates || confidentCandidates.length === 0) return;
+    const selectableCandidates = confidentCandidates?.filter(
+      (candidate) => !isExcludedJsonCandidateUrl(candidate.url),
+    );
+    if (!selectableCandidates || selectableCandidates.length === 0) return;
     const metadata = metadataObject(source.metadata);
     const existing = Array.isArray(metadata.directJsonCandidates)
-      ? metadata.directJsonCandidates
+      ? metadata.directJsonCandidates.filter(
+          (candidate) =>
+            !isObject(candidate) ||
+            typeof candidate.url !== "string" ||
+            !isExcludedJsonCandidateUrl(candidate.url),
+        )
       : [];
     const merged = [...existing];
-    for (const candidate of confidentCandidates) {
+    for (const candidate of selectableCandidates) {
       if (
         !merged.some((item) => isObject(item) && item.url === candidate.url)
       ) {
         merged.push(candidate);
       }
     }
-    const best = [...confidentCandidates].sort(
-      (a, b) => b.confidence - a.confidence,
+    const preferredCandidates = selectableCandidates.filter((candidate) =>
+      isHighValueJsonCandidateUrl(candidate.url),
+    );
+    const best = [...preferredCandidates].sort(
+      (a, b) =>
+        jsonCandidatePreferenceScore(b) - jsonCandidatePreferenceScore(a),
     )[0];
     const preferred =
       isObject(metadata.preferredDirectJsonEndpoint) &&
       typeof metadata.preferredDirectJsonEndpoint.confidence === "number" &&
+      !isExcludedJsonCandidateUrl(
+        String(metadata.preferredDirectJsonEndpoint.url ?? ""),
+      ) &&
+      isHighValueJsonCandidateUrl(
+        String(metadata.preferredDirectJsonEndpoint.url ?? ""),
+      ) &&
       (!best ||
-        metadata.preferredDirectJsonEndpoint.confidence >= best.confidence)
+        jsonCandidatePreferenceScore({
+          url: String(metadata.preferredDirectJsonEndpoint.url),
+          confidence: metadata.preferredDirectJsonEndpoint.confidence,
+        }) >= jsonCandidatePreferenceScore(best))
         ? metadata.preferredDirectJsonEndpoint
         : best
           ? withoutSample(best)
-          : metadata.preferredDirectJsonEndpoint;
+          : undefined;
+
+    const nextMetadata: Record<string, unknown> = {
+      ...metadata,
+      directJsonCandidates: merged.map((candidate) =>
+        isObject(candidate) ? withoutSample(candidate) : candidate,
+      ),
+    };
+    if (preferred) {
+      nextMetadata.preferredDirectJsonEndpoint = preferred;
+    } else {
+      delete nextMetadata.preferredDirectJsonEndpoint;
+    }
 
     await this.repository.updatePropertySource(source.id, {
-      metadata: {
-        ...metadata,
-        directJsonCandidates: merged.map((candidate) =>
-          isObject(candidate) ? withoutSample(candidate) : candidate,
-        ),
-        preferredDirectJsonEndpoint: preferred,
-      },
+      metadata: nextMetadata,
     });
   }
 
@@ -791,6 +827,7 @@ function preferredDirectJsonEndpoint(
   }
   const method = typeof value.method === "string" ? value.method : "GET";
   if (method !== "GET") return null;
+  if (!isHighValueJsonCandidateUrl(value.url)) return null;
   return {
     url: value.url,
     method,

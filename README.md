@@ -104,6 +104,11 @@ For real local browser use, install Playwright browser binaries if needed:
 npx playwright install
 ```
 
+Browser fallback uses conservative timing settings:
+
+- `BROWSER_TIMEOUT_MS`: navigation/body extraction timeout, default `15000`.
+- `BROWSER_POST_LOAD_WAIT_MS`: extra wait after page load/network idle to capture late XHR/fetch JSON responses, default `3000`.
+
 ## Main API Groups
 
 - Properties: create, list, get, update, delete properties.

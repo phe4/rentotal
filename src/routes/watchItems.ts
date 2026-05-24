@@ -5,11 +5,14 @@ import {
   type Repository,
 } from "../types.js";
 import { HttpError, sendError } from "../validation/http.js";
-import { optionalString, optionalUrl } from "../validation/index.js";
+import {
+  isUrlInputType,
+  optionalString,
+  optionalUrl,
+} from "../validation/index.js";
 import {
   ensureWatchList,
   inferSourceType,
-  intakeData,
   readBody,
   validateIntakeUrl,
   watchItemFields,
@@ -27,7 +30,8 @@ export function watchItemsRouter(repository: Repository): Router {
       let inputType = body.inputType as IntakeInputType | undefined;
       let inputValue = body.inputValue;
       const rawSourceUrl = optionalString(body, "sourceUrl");
-      const sourceUrl = optionalUrl(body, "sourceUrl");
+      const explicitSourceUrl = optionalUrl(body, "sourceUrl");
+      let sourceUrl = explicitSourceUrl;
 
       if (!propertyId) {
         const name = optionalString(body, "name");
@@ -60,6 +64,8 @@ export function watchItemsRouter(repository: Repository): Router {
           );
         }
         validateIntakeUrl(inputType, inputValue);
+        sourceUrl =
+          explicitSourceUrl ?? sourceUrlFromUrlLikeInput(inputType, inputValue);
         const propertyName =
           name ??
           (sourceUrl ? new URL(sourceUrl).hostname : (address ?? inputValue));
@@ -96,6 +102,8 @@ export function watchItemsRouter(repository: Repository): Router {
           );
         }
         validateIntakeUrl(inputType, inputValue);
+        sourceUrl =
+          explicitSourceUrl ?? sourceUrlFromUrlLikeInput(inputType, inputValue);
 
         if (sourceUrl) {
           await repository.createPropertySource({
@@ -109,17 +117,13 @@ export function watchItemsRouter(repository: Repository): Router {
         }
       }
 
-      await repository.createWatchIntake(
-        intakeData(
-          {
-            ...body,
-            inputType,
-            inputValue,
-            parsedStatus: "PARSED",
-          },
-          propertyId,
-        ),
-      );
+      await repository.createWatchIntake({
+        inputType,
+        inputValue,
+        parsedStatus: "PARSED",
+        matchedPropertyId: propertyId,
+        errorMessage: null,
+      });
 
       const watchItem = await repository.createWatchListItem({
         watchListId: watchList.id,
@@ -163,4 +167,13 @@ export function watchItemsRouter(repository: Repository): Router {
   });
 
   return router;
+}
+
+function sourceUrlFromUrlLikeInput(
+  inputType: IntakeInputType,
+  inputValue: unknown,
+): string | null {
+  if (!isUrlInputType(inputType) || typeof inputValue !== "string") return null;
+  const url = new URL(inputValue);
+  return url.toString();
 }

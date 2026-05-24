@@ -23,7 +23,7 @@ export type JsonEndpointCandidate = {
 
 export type BrowserCollector = (
   url: string,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; postLoadWaitMs?: number },
 ) => Promise<BrowserCollectedPage>;
 
 const BLOCKED_RESOURCE_TYPES = new Set(["image", "font", "media"]);
@@ -54,6 +54,11 @@ const CANDIDATE_SIGNALS = [
   "lease",
 ];
 const EXCLUDED_URL_SIGNALS = [
+  "cookielaw",
+  "consent",
+  "onetrust",
+  "launchdarkly",
+  "sdk/evalx",
   "analytics",
   "tracking",
   "doubleclick",
@@ -67,6 +72,20 @@ const EXCLUDED_URL_SIGNALS = [
   "auth",
   "session",
   "user",
+  "profile",
+  "phone-relays",
+  "config",
+];
+const HIGH_VALUE_URL_SIGNALS = [
+  { pattern: /available[-_/]?units?/, boost: 0.35 },
+  { pattern: /availability/, boost: 0.3 },
+  { pattern: /\/units?(?:[/?#]|$)/, boost: 0.32 },
+  { pattern: /floor[-_]?plans?/, boost: 0.26 },
+  { pattern: /pricing/, boost: 0.26 },
+];
+const GENERIC_URL_PENALTIES = [
+  { pattern: /\/community(?:[/?#]|$)/, penalty: 0.16 },
+  { pattern: /\/property\/[^/?#]+(?:[/?#]|$)/, penalty: 0.08 },
 ];
 
 function looksSensitive(key: string): boolean {
@@ -107,8 +126,7 @@ export function detectJsonEndpointCandidate(input: {
   json: unknown;
 }): JsonEndpointCandidate | null {
   const lowerUrl = input.url.toLowerCase();
-  if (EXCLUDED_URL_SIGNALS.some((signal) => lowerUrl.includes(signal)))
-    return null;
+  if (isExcludedJsonCandidateUrl(lowerUrl)) return null;
   const keyText = flattenKeys(input.json).join(" ").toLowerCase();
   const urlScore = CANDIDATE_SIGNALS.filter((signal) =>
     lowerUrl.includes(signal.toLowerCase()),
@@ -117,7 +135,10 @@ export function detectJsonEndpointCandidate(input: {
     keyText.includes(signal.toLowerCase()),
   ).length;
   if (urlScore + keyScore < 2) return null;
-  const confidence = Math.min(0.95, 0.45 + urlScore * 0.1 + keyScore * 0.08);
+  const confidence = Math.min(
+    0.95,
+    0.45 + urlScore * 0.1 + keyScore * 0.08 + highValueUrlBoost(lowerUrl),
+  );
   if (confidence < 0.6) return null;
   return {
     url: input.url,
@@ -130,11 +151,41 @@ export function detectJsonEndpointCandidate(input: {
   };
 }
 
+export function isExcludedJsonCandidateUrl(url: string): boolean {
+  const lowerUrl = url.toLowerCase();
+  return EXCLUDED_URL_SIGNALS.some((signal) => lowerUrl.includes(signal));
+}
+
+export function jsonCandidatePreferenceScore(
+  candidate: Pick<JsonEndpointCandidate, "url" | "confidence">,
+): number {
+  const lowerUrl = candidate.url.toLowerCase();
+  if (isExcludedJsonCandidateUrl(lowerUrl)) return Number.NEGATIVE_INFINITY;
+  const penalty = GENERIC_URL_PENALTIES.reduce(
+    (total, item) => total + (item.pattern.test(lowerUrl) ? item.penalty : 0),
+    0,
+  );
+  return candidate.confidence + highValueUrlBoost(lowerUrl) - penalty;
+}
+
+export function isHighValueJsonCandidateUrl(url: string): boolean {
+  const lowerUrl = url.toLowerCase();
+  return HIGH_VALUE_URL_SIGNALS.some((item) => item.pattern.test(lowerUrl));
+}
+
+function highValueUrlBoost(lowerUrl: string): number {
+  return HIGH_VALUE_URL_SIGNALS.reduce(
+    (total, item) => total + (item.pattern.test(lowerUrl) ? item.boost : 0),
+    0,
+  );
+}
+
 export const collectBrowserPage: BrowserCollector = async (
   url,
   options = {},
 ) => {
   const timeoutMs = options.timeoutMs ?? 15_000;
+  const postLoadWaitMs = options.postLoadWaitMs ?? 3_000;
   const browser = await chromium.launch({ headless: true });
   let context: BrowserContext | null = null;
   let page: Page | null = null;
@@ -197,6 +248,9 @@ export const collectBrowserPage: BrowserCollector = async (
       await page.waitForLoadState("networkidle", { timeout: timeoutMs });
     } catch {
       // DOM content is enough for the fallback parser; network idle is best-effort.
+    }
+    if (postLoadWaitMs > 0) {
+      await page.waitForTimeout(postLoadWaitMs);
     }
 
     const text = await page.locator("body").innerText({ timeout: timeoutMs });
