@@ -138,21 +138,43 @@ Out of scope:
 - Essex
 - other platform parsers
 
-## Phase 6B: Entrata Support
+## Phase 6B: CmsSiteManager JSONP Adapter and HTML Price Range Fallback
+
+Goal:
+Add CmsSiteManager / Proxy/GetUnits JSONP support and conservative rendered HTML price range parsing.
+
+In scope:
+
+- JSONP unwrap utility
+- CmsSiteManager / Proxy/GetUnits detection
+- CmsSiteManager units parser
+- direct endpoint support for JSONP where appropriate
+- HTML floorplan price range fallback
+- mocked fixtures only
+
+Out of scope:
+
+- replacing Knock/Doorway behavior
+- Entrata
+- Yardi
+- Greystar
+- other platform parsers
+
+## Phase 6C: Entrata Support
 
 Goal:
 Add Entrata platform detection and parser support using mocked fixtures only.
 
-Future only. Do not implement in Phase 6A.
+Future only. Do not implement in Phase 6B.
 
-## Phase 6C: Yardi Support
+## Phase 6D: Yardi Support
 
 Goal:
 Add Yardi platform detection and parser support using mocked fixtures only.
 
-Future only. Do not implement in Phase 6A.
+Future only. Do not implement in Phase 6B.
 
-## Phase 6D: Additional Platform Parsers
+## Phase 6E: Additional Platform Parsers
 
 Goal:
 Improve accuracy for other common apartment platforms as needed.

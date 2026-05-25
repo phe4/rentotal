@@ -15,6 +15,42 @@ function parseInteger(value: string): number {
   return Number(value.replace(/,/g, ""));
 }
 
+function hasFeeLikeContext(text: string, index: number): boolean {
+  const context = text.slice(Math.max(0, index - 60), index + 120);
+  return /\b(?:fee|fees|deposit|deposits|application|admin|security|pet|parking|holding)\b/i.test(
+    context,
+  );
+}
+
+function findRentMatch(
+  text: string,
+): { baseRent: number; matchedRentText: string; maxRent?: number } | undefined {
+  const rangeMatch = text.match(
+    /\$((?:[1-9]\d{0,2},\d{3})|(?:[1-9]\d{2,4}))\s*[-\u2013]\s*\$?((?:[1-9]\d{0,2},\d{3})|(?:[1-9]\d{2,4}))/i,
+  );
+  if (
+    rangeMatch?.[1] &&
+    rangeMatch[2] &&
+    !hasFeeLikeContext(text, rangeMatch.index ?? 0)
+  ) {
+    const baseRent = parseInteger(rangeMatch[1]);
+    const maxRent = parseInteger(rangeMatch[2]);
+    if (baseRent >= 500 && baseRent <= 20_000 && maxRent >= baseRent) {
+      return { baseRent, maxRent, matchedRentText: rangeMatch[0] };
+    }
+  }
+
+  const rentMatch = text.match(
+    /\b(?:rent:?\s*)?(?:(?:starting\s+at|from)\s*)?\$((?:[1-9]\d{0,2},\d{3})|(?:[1-9]\d{2,4}))(?:\s*\/?\s*(?:mo|month))?\b/i,
+  );
+  if (!rentMatch?.[1]) return undefined;
+  if (hasFeeLikeContext(text, rentMatch.index ?? 0)) return undefined;
+  return {
+    baseRent: parseInteger(rentMatch[1]),
+    matchedRentText: rentMatch[0],
+  };
+}
+
 function findNumber(pattern: RegExp, text: string): number | undefined {
   const match = text.match(pattern);
   if (!match?.[1]) return undefined;
@@ -36,13 +72,10 @@ export const genericHtmlRentParser: PriceParser = {
   name: "generic-html-rent-parser",
   parse(input): ParsedPriceItem[] {
     const text = decodeHtml(input.text);
-    const rentMatch = text.match(
-      /\b(?:rent:?\s*)?(?:starting\s+at\s*)?\$((?:[1-9]\d{0,2},\d{3})|(?:[1-9]\d{2,4}))(?:\s*\/?\s*(?:mo|month))?\b/i,
-    );
+    const rent = findRentMatch(text);
+    if (!rent) return [];
 
-    if (!rentMatch?.[1]) return [];
-
-    const baseRent = parseInteger(rentMatch[1]);
+    const baseRent = rent.baseRent;
     if (baseRent < 500 || baseRent > 20000) return [];
 
     const item: ParsedPriceItem = {
@@ -56,7 +89,8 @@ export const genericHtmlRentParser: PriceParser = {
       availabilityStatus: findAvailability(text),
       rawData: {
         parser: genericHtmlRentParser.name,
-        matchedRentText: rentMatch[0],
+        matchedRentText: rent.matchedRentText,
+        ...(rent.maxRent === undefined ? {} : { maxRent: rent.maxRent }),
       },
     };
 

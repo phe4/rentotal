@@ -1,0 +1,22 @@
+jQuery22406630535695412474_1779683287233({
+  "units": [
+    {
+      "unitNumber": "153",
+      "name": "153",
+      "floorplanName": "A1",
+      "numberOfBeds": "1",
+      "numberOfBaths": "1",
+      "squareFeet": "710",
+      "rent": "2719",
+      "totalRent": "2804",
+      "mandatoryFeesDeposits": "85",
+      "minLeaseTermInMonth": "13",
+      "maxLeaseTermInMonth": "15",
+      "internalAvailableDate": "2026-05-31",
+      "leaseStatus": "Available",
+      "unitLeasedStatus": "AVAILABLE",
+      "partnerName": "CmsSiteManager",
+      "partnerPropertyId": "1206682"
+    }
+  ]
+});

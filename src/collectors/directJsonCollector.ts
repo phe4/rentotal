@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseJsonOrJsonp } from "../parsers/jsonpUtils.js";
 import type { FetchLike } from "./httpCollector.js";
 
 export type DirectJsonEndpoint = {
@@ -32,7 +33,8 @@ export function createDirectJsonCollector(
       endpoint.url,
       {
         headers: {
-          accept: "application/json,text/plain;q=0.8,*/*;q=0.5",
+          accept:
+            "application/json,text/javascript,application/javascript,text/plain;q=0.8,*/*;q=0.5",
           "user-agent": "RentotalBot/0.1 (+https://example.local)",
         },
       },
@@ -44,11 +46,11 @@ export function createDirectJsonCollector(
       throw new Error(`HTTP ${response.status}`);
     }
 
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new Error("Direct JSON endpoint did not return valid JSON.");
+    const json = parseJsonOrJsonp(text);
+    if (json === null) {
+      throw new Error(
+        "Direct JSON endpoint did not return valid JSON or JSONP.",
+      );
     }
 
     return {

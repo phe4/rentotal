@@ -1,0 +1,15 @@
+jQuery22406630535695412474_1779683287233({
+  "units": [
+    {
+      "unitNumber": "154",
+      "floorplanName": "A1",
+      "numberOfBeds": "1",
+      "numberOfBaths": "1",
+      "squareFeet": "710",
+      "rent": null,
+      "totalRent": null,
+      "mandatoryFeesDeposits": "85",
+      "leaseStatus": "Waitlist"
+    }
+  ]
+});

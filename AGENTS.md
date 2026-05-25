@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 6A - Parser framework and Knock/Doorway support.
+Current phase: Phase 6B - CmsSiteManager JSONP adapter and HTML price range fallback.
 
 Build only:
 

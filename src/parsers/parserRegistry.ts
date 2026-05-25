@@ -1,3 +1,4 @@
+import { cmsSiteManagerParser } from "./cmsSiteManagerParser.js";
 import { parseGenericJsonRent } from "./genericJsonRentParser.js";
 import { knockDoorwayParser } from "./knockDoorwayParser.js";
 import type {
@@ -27,6 +28,7 @@ export const genericJsonDomainParser: DomainPriceParser = {
 
 export const priceParsers: DomainPriceParser[] = [
   knockDoorwayParser,
+  cmsSiteManagerParser,
   genericJsonDomainParser,
 ].sort((a, b) => b.priority - a.priority);
 

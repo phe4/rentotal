@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { chromium, type BrowserContext, type Page } from "playwright";
+import { parseJsonOrJsonp } from "../parsers/jsonpUtils.js";
+import {
+  isCmsSiteManagerGetUnitsUrl,
+  normalizeCmsSiteManagerEndpointUrl,
+} from "../parsers/platformDetector.js";
 
 export type BrowserCollectedPage = {
   url: string;
@@ -77,6 +82,14 @@ const EXCLUDED_URL_SIGNALS = [
   "config",
 ];
 const HIGH_VALUE_URL_SIGNALS = [
+  {
+    pattern: /cmssitemanager\/callback\.aspx.*act=proxy%2fgetunits/,
+    boost: 0.42,
+  },
+  {
+    pattern: /cmssitemanager\/callback\.aspx.*act=proxy\/getunits/,
+    boost: 0.42,
+  },
   { pattern: /available[-_/]?units?/, boost: 0.35 },
   { pattern: /availability/, boost: 0.3 },
   { pattern: /\/units?(?:[/?#]|$)/, boost: 0.32 },
@@ -125,7 +138,8 @@ export function detectJsonEndpointCandidate(input: {
   contentType?: string;
   json: unknown;
 }): JsonEndpointCandidate | null {
-  const lowerUrl = input.url.toLowerCase();
+  const normalizedUrl = normalizeJsonCandidateUrl(input.url);
+  const lowerUrl = normalizedUrl.toLowerCase();
   if (isExcludedJsonCandidateUrl(lowerUrl)) return null;
   const keyText = flattenKeys(input.json).join(" ").toLowerCase();
   const urlScore = CANDIDATE_SIGNALS.filter((signal) =>
@@ -134,14 +148,20 @@ export function detectJsonEndpointCandidate(input: {
   const keyScore = CANDIDATE_SIGNALS.filter((signal) =>
     keyText.includes(signal.toLowerCase()),
   ).length;
-  if (urlScore + keyScore < 2) return null;
+  if (!isCmsSiteManagerGetUnitsUrl(normalizedUrl) && urlScore + keyScore < 2) {
+    return null;
+  }
   const confidence = Math.min(
     0.95,
-    0.45 + urlScore * 0.1 + keyScore * 0.08 + highValueUrlBoost(lowerUrl),
+    0.45 +
+      urlScore * 0.1 +
+      keyScore * 0.08 +
+      highValueUrlBoost(lowerUrl) +
+      (isCmsSiteManagerGetUnitsUrl(normalizedUrl) ? 0.08 : 0),
   );
   if (confidence < 0.6) return null;
   return {
-    url: input.url,
+    url: normalizedUrl,
     method: "GET",
     contentType: input.contentType,
     confidence: Math.round(confidence * 100) / 100,
@@ -170,7 +190,16 @@ export function jsonCandidatePreferenceScore(
 
 export function isHighValueJsonCandidateUrl(url: string): boolean {
   const lowerUrl = url.toLowerCase();
-  return HIGH_VALUE_URL_SIGNALS.some((item) => item.pattern.test(lowerUrl));
+  return (
+    isCmsSiteManagerGetUnitsUrl(url) ||
+    HIGH_VALUE_URL_SIGNALS.some((item) => item.pattern.test(lowerUrl))
+  );
+}
+
+export function normalizeJsonCandidateUrl(url: string): string {
+  return isCmsSiteManagerGetUnitsUrl(url)
+    ? normalizeCmsSiteManagerEndpointUrl(url)
+    : url;
 }
 
 function highValueUrlBoost(lowerUrl: string): number {
@@ -200,18 +229,15 @@ export const collectBrowserPage: BrowserCollector = async (
         const url = response.url();
         if (
           !contentType?.includes("application/json") &&
-          !url.toLowerCase().includes("json")
+          !url.toLowerCase().includes("json") &&
+          !isCmsSiteManagerGetUnitsUrl(url)
         ) {
           return;
         }
         const text = await response.text().catch(() => "");
         if (!text || text.length > JSON_BODY_LIMIT) return;
-        let json: unknown;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          return;
-        }
+        const json = parseJsonOrJsonp(text);
+        if (json === null) return;
         const candidate = detectJsonEndpointCandidate({
           url,
           contentType,

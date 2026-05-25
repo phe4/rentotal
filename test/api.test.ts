@@ -8,8 +8,10 @@ import {
 } from "../src/collectors/browserCollector.js";
 import type { DirectJsonCollector } from "../src/collectors/directJsonCollector.js";
 import { InMemoryRepository } from "../src/db/inMemoryRepository.js";
+import { cmsSiteManagerParser } from "../src/parsers/cmsSiteManagerParser.js";
 import { genericHtmlRentParser } from "../src/parsers/genericHtmlRentParser.js";
 import { parseGenericJsonRent } from "../src/parsers/genericJsonRentParser.js";
+import { unwrapJsonp } from "../src/parsers/jsonpUtils.js";
 import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
@@ -44,6 +46,10 @@ function mockFetch(status: number, text: string, contentType = "text/html") {
 
 function fixtureJson(path: string): unknown {
   return JSON.parse(readFileSync(`test/fixtures/${path}`, "utf8"));
+}
+
+function fixtureText(path: string): string {
+  return readFileSync(`test/fixtures/${path}`, "utf8");
 }
 
 describe("Phase 1 API", () => {
@@ -1502,6 +1508,273 @@ describe("Phase 6A Knock/Doorway parser framework", () => {
             bathrooms: 1,
           },
         ],
+      },
+    });
+
+    expect(result.parserName).toBe("generic-json-rent-parser");
+    expect(result.items[0]?.baseRent).toBe(2550);
+  });
+});
+
+describe("Phase 6B CmsSiteManager JSONP and HTML price ranges", () => {
+  const cmsUnitsUrl =
+    "https://www.fairwayglen.com/CmsSiteManager/callback.aspx?act=Proxy/GetUnits&available=true&honordisplayorder=true&siteid=1206682&bestprice=true&leaseterm=13&dateneeded=2026-05-31&callback=jQuery22406630535695412474_1779683287233&_=1779683287237";
+  const normalizedCmsUnitsUrl =
+    "https://www.fairwayglen.com/CmsSiteManager/callback.aspx?act=Proxy%2FGetUnits&available=true&honordisplayorder=true&siteid=1206682&bestprice=true&leaseterm=13&dateneeded=2026-05-31";
+
+  async function createSource(metadata?: Record<string, unknown>) {
+    const property = await request(app)
+      .post("/api/properties")
+      .send({ name: "CmsSiteManager Target" })
+      .expect(201);
+    const source = await request(app)
+      .post(`/api/properties/${property.body.id}/sources`)
+      .send({
+        sourceType: "FLOORPLAN_URL",
+        sourceUrl: "https://www.example.test/floor-plans",
+        metadata,
+      })
+      .expect(201);
+    return { property: property.body, source: source.body };
+  }
+
+  function appWithCollectors(options: {
+    directJsonCollector?: DirectJsonCollector;
+    browserCollector?: BrowserCollector;
+  }) {
+    app = createApp(repository, {
+      scrapeService: {
+        enableBrowserFallback: true,
+        ...options,
+      },
+    });
+  }
+
+  it("JSONP unwrap parses valid callback JSON", () => {
+    const parsed = unwrapJsonp('jQuery123({"units":[{"rent":"2719"}]});');
+
+    expect(parsed).toEqual({ units: [{ rent: "2719" }] });
+  });
+
+  it("JSONP unwrap rejects invalid JSONP without eval", () => {
+    expect(unwrapJsonp("alert(1)")).toBeNull();
+    expect(unwrapJsonp("callback({invalid: true})")).toBeNull();
+  });
+
+  it("CmsSiteManager parser maps units JSONP into ParsedPriceItem", () => {
+    const json = unwrapJsonp(fixtureText("cmssitemanager/units.jsonp"));
+    const result = cmsSiteManagerParser.parse({
+      url: cmsUnitsUrl,
+      json,
+    });
+
+    expect(result.items[0]).toMatchObject({
+      floorplanName: "A1",
+      unitNumber: "153",
+      bedrooms: 1,
+      bathrooms: 1,
+      sqft: 710,
+      baseRent: 2719,
+      leaseTermMonths: 13,
+      moveInDate: "2026-05-31",
+      mandatoryFees: 85,
+      availabilityStatus: "AVAILABLE",
+    });
+    expect(result.confidence).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it("CmsSiteManager parser uses rent as baseRent and preserves totalRent in rawData", () => {
+    const json = unwrapJsonp(fixtureText("cmssitemanager/units.jsonp"));
+    const result = cmsSiteManagerParser.parse({
+      url: cmsUnitsUrl,
+      json,
+    });
+    const rawData = result.items[0]?.rawData as Record<string, unknown>;
+
+    expect(result.items[0]?.baseRent).toBe(2719);
+    expect(result.items[0]?.mandatoryFees).toBe(85);
+    expect(rawData.totalRent).toBe("2804");
+    expect(result.items[0]?.baseRent).not.toBe(2804);
+  });
+
+  it("direct JSON flow supports CmsSiteManager JSONP and creates snapshots", async () => {
+    const { property, source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: normalizedCmsUnitsUrl,
+        method: "GET",
+        confidence: 0.94,
+      },
+    });
+    mockFetch(
+      200,
+      fixtureText("cmssitemanager/units.jsonp"),
+      "text/javascript",
+    );
+
+    const response = await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    expect(response.body.run.crawlerTier).toBe("DIRECT_JSON");
+    expect(response.body.priceSnapshots[0]).toMatchObject({
+      baseRent: 2719,
+      mandatoryFees: 85,
+      effectiveRent: 2804,
+    });
+    const history = await request(app)
+      .get(`/api/properties/${property.id}/price-history`)
+      .expect(200);
+    expect(history.body).toHaveLength(1);
+  });
+
+  it("no-rent units JSONP creates no snapshots", async () => {
+    const { property, source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: normalizedCmsUnitsUrl,
+        method: "GET",
+        confidence: 0.94,
+      },
+    });
+    mockFetch(
+      200,
+      fixtureText("cmssitemanager/no-rent-units.jsonp"),
+      "text/javascript",
+    );
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const snapshots = await request(app)
+      .get(`/api/properties/${property.id}/price-snapshots`)
+      .expect(200);
+    expect(snapshots.body).toHaveLength(0);
+  });
+
+  it("Proxy/GetUnits endpoint can be stored as a high-confidence candidate after successful parse", async () => {
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered page says call for availability.</p>",
+      contentHash: "browser-no-rent",
+      rendered: true,
+      jsonCandidates: [
+        {
+          url: cmsUnitsUrl,
+          method: "GET",
+          contentType: "text/javascript",
+          confidence: 0.95,
+          reason: "CmsSiteManager Proxy/GetUnits endpoint candidate",
+          discoveredAt: "2026-05-24T00:00:00.000Z",
+          sample: unwrapJsonp(fixtureText("cmssitemanager/units.jsonp")),
+        },
+      ],
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource();
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+    };
+    expect(metadata.directJsonCandidates?.[0]?.url).toBe(normalizedCmsUnitsUrl);
+    expect(metadata.preferredDirectJsonEndpoint?.url).toBe(
+      normalizedCmsUnitsUrl,
+    );
+  });
+
+  it("existing preferred Knock units endpoint is not overwritten by CmsSiteManager candidate", async () => {
+    const knockUnitsUrl =
+      "https://doorway-api.knockrentals.com/v1/property/2010930/units";
+    const browserCollector = vi.fn<BrowserCollector>(async (url) => ({
+      url,
+      statusCode: 200,
+      contentType: "text/html",
+      text: "<p>Rendered page says call for availability.</p>",
+      contentHash: "browser-no-rent",
+      rendered: true,
+      jsonCandidates: [
+        {
+          url: cmsUnitsUrl,
+          method: "GET",
+          contentType: "text/javascript",
+          confidence: 0.95,
+          reason: "CmsSiteManager Proxy/GetUnits endpoint candidate",
+          discoveredAt: "2026-05-24T00:00:00.000Z",
+          sample: unwrapJsonp(fixtureText("cmssitemanager/units.jsonp")),
+        },
+      ],
+    }));
+    appWithCollectors({ browserCollector });
+    const { source } = await createSource({
+      preferredDirectJsonEndpoint: {
+        url: knockUnitsUrl,
+        method: "GET",
+        confidence: 0.95,
+      },
+    });
+    mockFetch(200, "<p>Loading prices...</p>");
+
+    await request(app)
+      .post(`/api/property-sources/${source.id}/scrape`)
+      .expect(200);
+
+    const updated = await repository.getPropertySource(source.id);
+    const metadata = updated?.metadata as {
+      directJsonCandidates?: Array<Record<string, unknown>>;
+      preferredDirectJsonEndpoint?: Record<string, unknown>;
+    };
+    expect(
+      metadata.directJsonCandidates?.map((candidate) => candidate.url),
+    ).toContain(normalizedCmsUnitsUrl);
+    expect(metadata.preferredDirectJsonEndpoint?.url).toBe(knockUnitsUrl);
+  });
+
+  it("volatile callback and cachebuster params are stripped in metadata", () => {
+    const candidate = detectJsonEndpointCandidate({
+      url: cmsUnitsUrl,
+      contentType: "text/javascript",
+      json: unwrapJsonp(fixtureText("cmssitemanager/units.jsonp")),
+    });
+
+    expect(candidate?.url).toBe(normalizedCmsUnitsUrl);
+    expect(candidate?.url).not.toContain("callback=");
+    expect(candidate?.url).not.toContain("_=");
+  });
+
+  it("HTML price range parser extracts lower rent from a range", () => {
+    const result = genericHtmlRentParser.parse({
+      url: "https://example.com/floor-plans",
+      text: fixtureText("cmssitemanager/floorplan-range.html"),
+    });
+    const rawData = result[0]?.rawData as Record<string, unknown>;
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.baseRent).toBe(2719);
+    expect(rawData.maxRent).toBe(2853);
+  });
+
+  it("HTML price range parser does not parse fee or deposit ranges as rent", () => {
+    const result = genericHtmlRentParser.parse({
+      url: "https://example.com/floor-plans",
+      text: "<p>Application fee $500 - $700. Security deposit $1,000.</p>",
+    });
+
+    expect(result).toHaveLength(0);
+  });
+
+  it("parser registry keeps generic fallback for non-CmsSiteManager JSON", () => {
+    const result = parseJsonWithRegistry({
+      url: "https://example.com/api/availability",
+      json: {
+        floorplans: [{ floorPlanName: "B1", unitNumber: "201", rent: 2550 }],
       },
     });
 

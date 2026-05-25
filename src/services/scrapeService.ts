@@ -11,6 +11,7 @@ import {
   isHighValueJsonCandidateUrl,
   isExcludedJsonCandidateUrl,
   jsonCandidatePreferenceScore,
+  normalizeJsonCandidateUrl,
 } from "../collectors/browserCollector.js";
 import {
   createDirectJsonCollector,
@@ -21,7 +22,10 @@ import {
 import type { ParsedPriceItem, PriceParser } from "../parsers/priceParser.js";
 import { genericHtmlRentParser } from "../parsers/genericHtmlRentParser.js";
 import { parseJsonWithRegistry } from "../parsers/parserRegistry.js";
-import { isKnockUnitsUrl } from "../parsers/platformDetector.js";
+import {
+  isCmsSiteManagerGetUnitsUrl,
+  isKnockUnitsUrl,
+} from "../parsers/platformDetector.js";
 import { calculateEffectiveRent } from "./effectiveRent.js";
 import type {
   AlertType,
@@ -407,9 +411,16 @@ export class ScrapeService {
       (candidate) =>
         candidate.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE,
     );
-    const selectableCandidates = confidentCandidates?.filter(
-      (candidate) => !isExcludedJsonCandidateUrl(candidate.url),
-    );
+    const selectableCandidates = confidentCandidates
+      ?.map((candidate) => ({
+        ...candidate,
+        url: normalizeJsonCandidateUrl(candidate.url),
+      }))
+      .filter(
+        (candidate) =>
+          !isExcludedJsonCandidateUrl(candidate.url) &&
+          candidateCanBeStored(candidate),
+      );
     if (!selectableCandidates || selectableCandidates.length === 0) return;
     const metadata = metadataObject(source.metadata);
     const existing = Array.isArray(metadata.directJsonCandidates)
@@ -435,7 +446,7 @@ export class ScrapeService {
       (a, b) =>
         jsonCandidatePreferenceScore(b) - jsonCandidatePreferenceScore(a),
     )[0];
-    const preferred =
+    const existingPreferred =
       isObject(metadata.preferredDirectJsonEndpoint) &&
       typeof metadata.preferredDirectJsonEndpoint.confidence === "number" &&
       !isExcludedJsonCandidateUrl(
@@ -443,16 +454,22 @@ export class ScrapeService {
       ) &&
       isHighValueJsonCandidateUrl(
         String(metadata.preferredDirectJsonEndpoint.url ?? ""),
-      ) &&
-      (!best ||
-        jsonCandidatePreferenceScore({
-          url: String(metadata.preferredDirectJsonEndpoint.url),
-          confidence: metadata.preferredDirectJsonEndpoint.confidence,
-        }) >= jsonCandidatePreferenceScore(best))
+      )
         ? metadata.preferredDirectJsonEndpoint
-        : best
-          ? withoutSample(best)
-          : undefined;
+        : undefined;
+    const keepExistingPreferred =
+      existingPreferred &&
+      (isKnockUnitsUrl(String(existingPreferred.url ?? "")) ||
+        !best ||
+        jsonCandidatePreferenceScore({
+          url: String(existingPreferred.url),
+          confidence: Number(existingPreferred.confidence),
+        }) >= jsonCandidatePreferenceScore(best));
+    const preferred = keepExistingPreferred
+      ? existingPreferred
+      : best
+        ? withoutSample(best)
+        : undefined;
 
     const nextMetadata: Record<string, unknown> = {
       ...metadata,
@@ -851,6 +868,12 @@ function preferredDirectJsonEndpoint(
 function candidateCanBePreferred(candidate: JsonEndpointCandidate): boolean {
   if (isKnockUnitsUrl(candidate.url)) return true;
   if (!isHighValueJsonCandidateUrl(candidate.url)) return false;
+  if (
+    isCmsSiteManagerGetUnitsUrl(candidate.url) &&
+    candidate.sample === undefined
+  ) {
+    return false;
+  }
   if (candidate.sample === undefined) return true;
   const result = parseJsonWithRegistry({
     url: candidate.url,
@@ -862,6 +885,22 @@ function candidateCanBePreferred(candidate: JsonEndpointCandidate): boolean {
   });
   return (
     result.items.length > 0 &&
+    (isCmsSiteManagerGetUnitsUrl(candidate.url) ||
+      result.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE) &&
     candidate.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE
   );
+}
+
+function candidateCanBeStored(candidate: JsonEndpointCandidate): boolean {
+  if (!isCmsSiteManagerGetUnitsUrl(candidate.url)) return true;
+  if (candidate.sample === undefined) return false;
+  const result = parseJsonWithRegistry({
+    url: candidate.url,
+    json: candidate.sample,
+    context: {
+      url: candidate.url,
+      contentType: candidate.contentType,
+    },
+  });
+  return result.items.length > 0;
 }

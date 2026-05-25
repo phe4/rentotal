@@ -1,12 +1,15 @@
-export type Platform = "KNOCK_DOORWAY" | "UNKNOWN";
+export type Platform = "KNOCK_DOORWAY" | "CMSSITEMANAGER" | "UNKNOWN";
 
 export function detectPlatform(input: {
   url?: string;
   json?: unknown;
 }): Platform {
   if (input.url) {
-    return isKnockDoorwayUrl(input.url) ? "KNOCK_DOORWAY" : "UNKNOWN";
+    if (isKnockDoorwayUrl(input.url)) return "KNOCK_DOORWAY";
+    if (isCmsSiteManagerGetUnitsUrl(input.url)) return "CMSSITEMANAGER";
+    return "UNKNOWN";
   }
+  if (hasCmsSiteManagerUnitsJson(input.json)) return "CMSSITEMANAGER";
   if (hasKnockLikeJson(input.json)) return "KNOCK_DOORWAY";
   return "UNKNOWN";
 }
@@ -41,6 +44,29 @@ export function isKnockUnitsUrl(url: string): boolean {
   }
 }
 
+export function isCmsSiteManagerGetUnitsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.pathname.toLowerCase().endsWith("/cmssitemanager/callback.aspx") &&
+      parsed.searchParams.get("act")?.toLowerCase() === "proxy/getunits"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeCmsSiteManagerEndpointUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("callback");
+    parsed.searchParams.delete("_");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function hasKnockLikeJson(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const keys = flattenKeys(value).join(" ").toLowerCase();
@@ -49,6 +75,25 @@ function hasKnockLikeJson(value: unknown): boolean {
     keys.includes("unit") &&
     (keys.includes("rent") || keys.includes("price"))
   );
+}
+
+function hasCmsSiteManagerUnitsJson(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const units = (value as Record<string, unknown>).units;
+  if (!Array.isArray(units)) return false;
+  return units.slice(0, 5).some((unit) => {
+    if (!unit || typeof unit !== "object" || Array.isArray(unit)) return false;
+    const keys = new Set(
+      Object.keys(unit as Record<string, unknown>).map((key) =>
+        key.toLowerCase(),
+      ),
+    );
+    return (
+      keys.has("rent") &&
+      (keys.has("unitnumber") || keys.has("name")) &&
+      (keys.has("floorplanname") || keys.has("numberofbeds"))
+    );
+  });
 }
 
 function flattenKeys(value: unknown, keys: string[] = [], depth = 0): string[] {
