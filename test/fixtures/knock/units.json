@@ -1,0 +1,24 @@
+{
+  "units": [
+    {
+      "unitNumber": "301",
+      "floorPlanName": "A1",
+      "bedrooms": 1,
+      "bathrooms": 1,
+      "sqft": 742,
+      "rent": 2450,
+      "available": true,
+      "moveInDate": "2026-06-01",
+      "specialOfferText": "1 month free"
+    },
+    {
+      "unitNumber": "412",
+      "floorPlanName": "B2",
+      "bedrooms": 2,
+      "bathrooms": 2,
+      "sqft": 1010,
+      "rent": 3150,
+      "availability": "AVAILABLE"
+    }
+  ]
+}

@@ -20,7 +20,8 @@ import {
 } from "../collectors/directJsonCollector.js";
 import type { ParsedPriceItem, PriceParser } from "../parsers/priceParser.js";
 import { genericHtmlRentParser } from "../parsers/genericHtmlRentParser.js";
-import { parseGenericJsonRent } from "../parsers/genericJsonRentParser.js";
+import { parseJsonWithRegistry } from "../parsers/parserRegistry.js";
+import { isKnockUnitsUrl } from "../parsers/platformDetector.js";
 import { calculateEffectiveRent } from "./effectiveRent.js";
 import type {
   AlertType,
@@ -258,7 +259,18 @@ export class ScrapeService {
     try {
       const page = await this.directJsonCollector(endpoint);
       await this.saveRawPage(run, source, page);
-      const parsedItems = parseGenericJsonRent(page.json);
+      const parserResult = parseJsonWithRegistry({
+        url: page.url,
+        json: page.json,
+        context: {
+          url: page.url,
+          sourceUrl: source.sourceUrl ?? undefined,
+          sourceType: source.sourceType,
+          contentType: page.contentType,
+          metadata: source.metadata,
+        },
+      });
+      const parsedItems = parserResult.items;
       const finishedAt = new Date();
 
       if (parsedItems.length === 0) {
@@ -416,8 +428,8 @@ export class ScrapeService {
         merged.push(candidate);
       }
     }
-    const preferredCandidates = selectableCandidates.filter((candidate) =>
-      isHighValueJsonCandidateUrl(candidate.url),
+    const preferredCandidates = selectableCandidates.filter(
+      candidateCanBePreferred,
     );
     const best = [...preferredCandidates].sort(
       (a, b) =>
@@ -834,4 +846,22 @@ function preferredDirectJsonEndpoint(
     contentType:
       typeof value.contentType === "string" ? value.contentType : undefined,
   };
+}
+
+function candidateCanBePreferred(candidate: JsonEndpointCandidate): boolean {
+  if (isKnockUnitsUrl(candidate.url)) return true;
+  if (!isHighValueJsonCandidateUrl(candidate.url)) return false;
+  if (candidate.sample === undefined) return true;
+  const result = parseJsonWithRegistry({
+    url: candidate.url,
+    json: candidate.sample,
+    context: {
+      url: candidate.url,
+      contentType: candidate.contentType,
+    },
+  });
+  return (
+    result.items.length > 0 &&
+    candidate.confidence >= MIN_DIRECT_JSON_CANDIDATE_CONFIDENCE
+  );
 }

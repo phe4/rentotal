@@ -115,15 +115,50 @@ In scope:
 - direct JSON collector
 - generic JSON parser
 
-## Phase 6: Domain-Specific Parsers
+## Phase 6A: Parser Framework and Knock/Doorway Support
 
 Goal:
-Improve accuracy for common apartment platforms.
+Add a domain-specific parser framework and the first platform-specific support for Knock / Doorway API.
 
-Potential targets:
+In scope:
+
+- parser registry
+- platform detection framework
+- Knock / Doorway API detection
+- Knock units endpoint parser
+- safe preferred endpoint promotion for units/availability data
+- mocked fixtures only
+
+Out of scope:
 
 - Entrata
 - Yardi
+- Greystar
+- AvalonBay
+- Essex
+- other platform parsers
+
+## Phase 6B: Entrata Support
+
+Goal:
+Add Entrata platform detection and parser support using mocked fixtures only.
+
+Future only. Do not implement in Phase 6A.
+
+## Phase 6C: Yardi Support
+
+Goal:
+Add Yardi platform detection and parser support using mocked fixtures only.
+
+Future only. Do not implement in Phase 6A.
+
+## Phase 6D: Additional Platform Parsers
+
+Goal:
+Improve accuracy for other common apartment platforms as needed.
+
+Potential future targets:
+
 - Greystar
 - AvalonBay
 - Essex

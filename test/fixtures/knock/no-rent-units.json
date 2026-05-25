@@ -1,0 +1,12 @@
+{
+  "units": [
+    {
+      "unitNumber": "301",
+      "floorPlanName": "A1",
+      "bedrooms": 1,
+      "bathrooms": 1,
+      "sqft": 742,
+      "available": true
+    }
+  ]
+}
