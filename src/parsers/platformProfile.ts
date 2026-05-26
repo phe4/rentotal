@@ -6,6 +6,7 @@ export type PlatformProfileResponseFormat = "json" | "jsonp";
 export type FieldMapping = string | string[];
 
 export type PlatformProfile = {
+  id: string;
   platform: string;
   version: string;
   status: PlatformProfileStatus;
@@ -73,10 +74,13 @@ export function parseWithPlatformProfile(input: {
   text?: string;
   json?: unknown;
   includeDraftProfiles?: boolean;
+  explicitValidationMode?: boolean;
 }): ParsedPriceItem[] {
   if (
-    input.profile.status === "DISABLED" ||
-    (input.profile.status === "DRAFT" && !input.includeDraftProfiles)
+    (input.profile.status === "DISABLED" && !input.explicitValidationMode) ||
+    (input.profile.status === "DRAFT" &&
+      !input.includeDraftProfiles &&
+      !input.explicitValidationMode)
   ) {
     return [];
   }

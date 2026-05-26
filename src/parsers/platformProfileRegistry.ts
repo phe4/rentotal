@@ -8,6 +8,7 @@ import {
 } from "./platformProfile.js";
 
 export const cmsSiteManagerProfile: PlatformProfile = {
+  id: "cmssitemanager-proxy-getunits",
   platform: "CmsSiteManager",
   version: "1.0.0",
   status: "APPROVED",
@@ -65,6 +66,12 @@ export function findApprovedProfile(input: {
   return platformProfiles.find((profile) =>
     profileMatchesUrl(profile, input.url),
   );
+}
+
+export function findProfileById(
+  profileId: string,
+): PlatformProfile | undefined {
+  return platformProfiles.find((profile) => profile.id === profileId);
 }
 
 export const platformProfileDomainParser: DomainPriceParser = {

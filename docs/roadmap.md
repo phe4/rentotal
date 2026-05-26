@@ -183,10 +183,10 @@ Out of scope:
 - AI-generated profile drafts
 - replacing Knock/Doorway or CmsSiteManager behavior
 
-## Phase 6D: Profile Draft / Validation Tooling
+## Phase 6D: Platform Profile Validation Tooling
 
 Goal:
-Add tooling to draft, inspect, and validate mapping profiles against local fixtures.
+Add deterministic validation tooling for platform profiles using local fixtures and expected parsed output.
 
 Future only. Do not implement in Phase 6C.
 

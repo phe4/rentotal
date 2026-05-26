@@ -16,6 +16,7 @@ import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
 import {
   cmsSiteManagerProfile,
+  findProfileById,
   platformProfileDomainParser,
 } from "../src/parsers/platformProfileRegistry.js";
 import {
@@ -24,6 +25,8 @@ import {
   profileMatchesUrl,
   type PlatformProfile,
 } from "../src/parsers/platformProfile.js";
+import { cmsSiteManagerValidationCases } from "../src/parsers/platformProfileValidationCases.js";
+import { validateProfileCase } from "../src/parsers/platformProfileValidation.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
 import type { PriceSnapshotRecord } from "../src/types.js";
 
@@ -2073,6 +2076,140 @@ describe("Phase 6C Platform Profile Framework", () => {
 
     expect(result.parserName).toBe(cmsSiteManagerParser.name);
     expect(result.items[0]?.baseRent).toBe(2719);
+  });
+});
+
+describe("Phase 6D Platform Profile Validation Tooling", () => {
+  const [cmsValidationCase] = cmsSiteManagerValidationCases;
+
+  function validationProfile(
+    overrides: Partial<PlatformProfile> = {},
+  ): PlatformProfile {
+    return {
+      ...cmsSiteManagerProfile,
+      ...overrides,
+      match: { ...cmsSiteManagerProfile.match, ...overrides.match },
+      response: { ...cmsSiteManagerProfile.response, ...overrides.response },
+      mapping: { ...cmsSiteManagerProfile.mapping, ...overrides.mapping },
+      rawData: { ...cmsSiteManagerProfile.rawData, ...overrides.rawData },
+      rules: { ...cmsSiteManagerProfile.rules, ...overrides.rules },
+      endpointPromotion: {
+        canPromote: cmsSiteManagerProfile.endpointPromotion!.canPromote,
+        ...cmsSiteManagerProfile.endpointPromotion,
+        ...overrides.endpointPromotion,
+      },
+    };
+  }
+
+  it("validator passes for CmsSiteManager fixture and expected output", () => {
+    const profile = findProfileById(cmsValidationCase.profileId);
+
+    expect(profile).toBeDefined();
+    expect(
+      validateProfileCase({
+        profile: profile!,
+        profileCase: cmsValidationCase,
+      }),
+    ).toMatchObject({
+      passed: true,
+      itemCount: 1,
+      expectedCount: 1,
+      errors: [],
+    });
+  });
+
+  it("validator fails when expected item count differs", () => {
+    const report = validateProfileCase({
+      profile: cmsSiteManagerProfile,
+      profileCase: {
+        ...cmsValidationCase,
+        expectedItems: [],
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.errors[0]).toContain(
+      "Expected 0 parsed item(s) but received 1.",
+    );
+  });
+
+  it("validator fails with a clear field mismatch error", () => {
+    const report = validateProfileCase({
+      profile: cmsSiteManagerProfile,
+      profileCase: {
+        ...cmsValidationCase,
+        expectedItems: [{ baseRent: 9999 }],
+      },
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.errors[0]).toContain(
+      "Item 0 field baseRent expected 9999 but received 2719.",
+    );
+  });
+
+  it("validator can run a DRAFT profile explicitly", () => {
+    const report = validateProfileCase({
+      profile: validationProfile({ status: "DRAFT" }),
+      profileCase: cmsValidationCase,
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.itemCount).toBe(1);
+  });
+
+  it("validator can run a DISABLED profile explicitly", () => {
+    const report = validateProfileCase({
+      profile: validationProfile({ status: "DISABLED" }),
+      profileCase: cmsValidationCase,
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.itemCount).toBe(1);
+  });
+
+  it("normal runtime still only auto-runs APPROVED profiles", () => {
+    const draft = validationProfile({ status: "DRAFT" });
+    const disabled = validationProfile({ status: "DISABLED" });
+
+    expect(profileMatchesUrl(draft, cmsValidationCase.input.url)).toBe(false);
+    expect(profileMatchesUrl(disabled, cmsValidationCase.input.url)).toBe(
+      false,
+    );
+    expect(
+      parseWithPlatformProfile({
+        profile: draft,
+        url: cmsValidationCase.input.url,
+        text: fixtureText("cmssitemanager/units.jsonp"),
+      }),
+    ).toHaveLength(0);
+    expect(
+      parseWithPlatformProfile({
+        profile: disabled,
+        url: cmsValidationCase.input.url,
+        text: fixtureText("cmssitemanager/units.jsonp"),
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("validation cases use local fixtures only", () => {
+    expect(cmsValidationCase.input.fixturePath).toMatch(/^test\/fixtures\//);
+    expect(cmsValidationCase.input.fixturePath).not.toMatch(/^https?:\/\//i);
+  });
+
+  it("validator rejects fixture paths outside test fixtures", () => {
+    expect(() =>
+      validateProfileCase({
+        profile: cmsSiteManagerProfile,
+        profileCase: {
+          ...cmsValidationCase,
+          input: {
+            ...cmsValidationCase.input,
+            fixturePath: "README.md",
+          },
+        },
+      }),
+    ).toThrow("Profile validation fixtures must be under test/fixtures.");
   });
 });
 
