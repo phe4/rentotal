@@ -160,24 +160,54 @@ Out of scope:
 - Greystar
 - other platform parsers
 
-## Phase 6C: Entrata Support
+## Phase 6C: Platform Profile Framework
 
 Goal:
-Add Entrata platform detection and parser support using mocked fixtures only.
+Add a deterministic Platform Profile framework for mapping-based platform extraction.
 
-Future only. Do not implement in Phase 6B.
+In scope:
 
-## Phase 6D: Yardi Support
+- PlatformProfile type
+- profile matcher and registry
+- profile parser runtime
+- JSON and JSONP profile support
+- field mapping, nested paths, fallback fields, and numeric normalization
+- CmsSiteManager profile as the first example
+- existing custom parsers remain intact
+
+Out of scope:
+
+- Entrata production profile
+- Yardi production profile
+- DB-backed profiles
+- AI-generated profile drafts
+- replacing Knock/Doorway or CmsSiteManager behavior
+
+## Phase 6D: Profile Draft / Validation Tooling
 
 Goal:
-Add Yardi platform detection and parser support using mocked fixtures only.
+Add tooling to draft, inspect, and validate mapping profiles against local fixtures.
 
-Future only. Do not implement in Phase 6B.
+Future only. Do not implement in Phase 6C.
 
-## Phase 6E: Additional Platform Parsers
+## Phase 6E: Entrata Profile
 
 Goal:
-Improve accuracy for other common apartment platforms as needed.
+Add an Entrata platform profile if fixture validation shows the structure is stable enough for mapping-based extraction.
+
+Future only. Do not implement in Phase 6C.
+
+## Phase 6F: Yardi Profile
+
+Goal:
+Add a Yardi platform profile if fixture validation shows the structure is stable enough for mapping-based extraction.
+
+Future only. Do not implement in Phase 6C.
+
+## Phase 6G: More Profiles Or Custom Adapters As Needed
+
+Goal:
+Improve accuracy for other common apartment platforms using either platform profiles or custom adapters, depending on complexity.
 
 Potential future targets:
 

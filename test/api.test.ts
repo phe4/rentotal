@@ -14,6 +14,16 @@ import { parseGenericJsonRent } from "../src/parsers/genericJsonRentParser.js";
 import { unwrapJsonp } from "../src/parsers/jsonpUtils.js";
 import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
+import {
+  cmsSiteManagerProfile,
+  platformProfileDomainParser,
+} from "../src/parsers/platformProfileRegistry.js";
+import {
+  numberFromValue,
+  parseWithPlatformProfile,
+  profileMatchesUrl,
+  type PlatformProfile,
+} from "../src/parsers/platformProfile.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
 import type { PriceSnapshotRecord } from "../src/types.js";
 
@@ -1780,6 +1790,289 @@ describe("Phase 6B CmsSiteManager JSONP and HTML price ranges", () => {
 
     expect(result.parserName).toBe("generic-json-rent-parser");
     expect(result.items[0]?.baseRent).toBe(2550);
+  });
+});
+
+describe("Phase 6C Platform Profile Framework", () => {
+  const cmsUnitsUrl =
+    "https://www.fairwayglen.com/CmsSiteManager/callback.aspx?act=Proxy/GetUnits&siteid=1206682&callback=jQuery123&_=123";
+
+  function cmsJson(): unknown {
+    return unwrapJsonp(fixtureText("cmssitemanager/units.jsonp"));
+  }
+
+  function profile(overrides: Partial<PlatformProfile> = {}): PlatformProfile {
+    return {
+      ...cmsSiteManagerProfile,
+      ...overrides,
+      match: { ...cmsSiteManagerProfile.match, ...overrides.match },
+      response: { ...cmsSiteManagerProfile.response, ...overrides.response },
+      mapping: { ...cmsSiteManagerProfile.mapping, ...overrides.mapping },
+      rawData: { ...cmsSiteManagerProfile.rawData, ...overrides.rawData },
+      rules: { ...cmsSiteManagerProfile.rules, ...overrides.rules },
+      endpointPromotion: {
+        canPromote: cmsSiteManagerProfile.endpointPromotion!.canPromote,
+        ...cmsSiteManagerProfile.endpointPromotion,
+        ...overrides.endpointPromotion,
+      },
+    };
+  }
+
+  it("profile matcher matches CmsSiteManager URL and query", () => {
+    expect(profileMatchesUrl(cmsSiteManagerProfile, cmsUnitsUrl)).toBe(true);
+  });
+
+  it("profile matcher does not match unrelated URLs", () => {
+    expect(
+      profileMatchesUrl(
+        cmsSiteManagerProfile,
+        "https://example.com/api/availability",
+      ),
+    ).toBe(false);
+  });
+
+  it("profile runtime unwraps JSONP through the existing JSONP utility", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      text: fixtureText("cmssitemanager/units.jsonp"),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.baseRent).toBe(2719);
+  });
+
+  it("profile parser maps CmsSiteManager units into ParsedPriceItem", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      json: cmsJson(),
+    });
+
+    expect(items[0]).toMatchObject({
+      floorplanName: "A1",
+      unitNumber: "153",
+      bedrooms: 1,
+      bathrooms: 1,
+      sqft: 710,
+      baseRent: 2719,
+      leaseTermMonths: 13,
+      moveInDate: "2026-05-31",
+      mandatoryFees: 85,
+      availabilityStatus: "AVAILABLE",
+    });
+  });
+
+  it("profile fallback fields work for unitNumber then name", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      json: {
+        units: [
+          {
+            name: "Fallback Name",
+            floorplanName: "A1",
+            rent: "2719",
+          },
+        ],
+      },
+    });
+
+    expect(items[0]?.unitNumber).toBe("Fallback Name");
+  });
+
+  it("profile nested path mapping works", () => {
+    const nestedProfile = profile({
+      response: { format: "json", arrayPath: "data.units" },
+      mapping: {
+        baseRent: "pricing.marketRent",
+        unitNumber: "unit.number",
+      },
+    });
+    const items = parseWithPlatformProfile({
+      profile: nestedProfile,
+      url: cmsUnitsUrl,
+      json: {
+        data: {
+          units: [
+            { pricing: { marketRent: "$2,719" }, unit: { number: "153" } },
+          ],
+        },
+      },
+    });
+
+    expect(items[0]?.baseRent).toBe(2719);
+    expect(items[0]?.unitNumber).toBe("153");
+  });
+
+  it("profile numeric normalization handles dollars, commas, and decimals", () => {
+    expect(numberFromValue("$2,719")).toBe(2719);
+    expect(numberFromValue("2,719")).toBe(2719);
+    expect(numberFromValue("5.00")).toBe(5);
+  });
+
+  it("profile required field validation skips rows without baseRent", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      json: { units: [{ unitNumber: "153", floorplanName: "A1" }] },
+    });
+
+    expect(items).toHaveLength(0);
+  });
+
+  it("profile min and max baseRent checks reject bad values", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      json: {
+        units: [
+          { unitNumber: "low", rent: "200" },
+          { unitNumber: "high", rent: "25000" },
+        ],
+      },
+    });
+
+    expect(items).toHaveLength(0);
+  });
+
+  it("profile rawData preserve keeps totalRent but does not use it as baseRent", () => {
+    const items = parseWithPlatformProfile({
+      profile: cmsSiteManagerProfile,
+      url: cmsUnitsUrl,
+      json: cmsJson(),
+    });
+    const rawData = items[0]?.rawData as Record<string, unknown>;
+
+    expect(items[0]?.baseRent).toBe(2719);
+    expect(rawData.totalRent).toBe("2804");
+    expect(items[0]?.baseRent).not.toBe(2804);
+  });
+
+  it("profile rejects disallowed baseRent source fields", () => {
+    const totalRentProfile = profile({
+      mapping: { baseRent: "totalRent" },
+      rules: {
+        requiredFields: ["baseRent"],
+        doNotUseAsBaseRent: ["totalRent"],
+      },
+    });
+    const sqftProfile = profile({
+      mapping: { baseRent: "squareFeet" },
+      rules: { requiredFields: ["baseRent"] },
+    });
+    const feeProfile = profile({
+      mapping: { baseRent: "mandatoryFeesDeposits" },
+      rules: { requiredFields: ["baseRent"] },
+    });
+
+    expect(
+      parseWithPlatformProfile({
+        profile: totalRentProfile,
+        url: cmsUnitsUrl,
+        json: { units: [{ totalRent: "2804" }] },
+      }),
+    ).toHaveLength(0);
+    expect(
+      parseWithPlatformProfile({
+        profile: sqftProfile,
+        url: cmsUnitsUrl,
+        json: { units: [{ squareFeet: "710" }] },
+      }),
+    ).toHaveLength(0);
+    expect(
+      parseWithPlatformProfile({
+        profile: feeProfile,
+        url: cmsUnitsUrl,
+        json: { units: [{ mandatoryFeesDeposits: "850" }] },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("profile rawData preserve filters nested sensitive values", () => {
+    const sensitiveProfile = profile({
+      rawData: { preserve: ["details", "totalRent"] },
+    });
+    const items = parseWithPlatformProfile({
+      profile: sensitiveProfile,
+      url: cmsUnitsUrl,
+      json: {
+        units: [
+          {
+            rent: "2719",
+            totalRent: "2804",
+            details: {
+              display: "safe",
+              authToken: "secret-token",
+              residentName: "private-name",
+            },
+          },
+        ],
+      },
+    });
+    const rawData = items[0]?.rawData as Record<string, unknown>;
+    const details = rawData.details as Record<string, unknown>;
+
+    expect(rawData.totalRent).toBe("2804");
+    expect(details.display).toBe("safe");
+    expect(details.authToken).toBeUndefined();
+    expect(details.residentName).toBeUndefined();
+  });
+
+  it("DRAFT profiles do not run automatically", () => {
+    const draft = profile({ status: "DRAFT" });
+
+    expect(profileMatchesUrl(draft, cmsUnitsUrl)).toBe(false);
+    expect(
+      parseWithPlatformProfile({
+        profile: draft,
+        url: cmsUnitsUrl,
+        json: cmsJson(),
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("DISABLED profiles do not run automatically", () => {
+    const disabled = profile({ status: "DISABLED" });
+
+    expect(profileMatchesUrl(disabled, cmsUnitsUrl)).toBe(false);
+    expect(
+      parseWithPlatformProfile({
+        profile: disabled,
+        url: cmsUnitsUrl,
+        json: cmsJson(),
+      }),
+    ).toHaveLength(0);
+  });
+
+  it("APPROVED profile parser runs automatically when selected", () => {
+    const result = platformProfileDomainParser.parse({
+      url: cmsUnitsUrl,
+      json: cmsJson(),
+    });
+
+    expect(result.parserName).toBe("platform-profile-parser");
+    expect(result.items[0]?.baseRent).toBe(2719);
+  });
+
+  it("existing Knock custom parser behavior remains intact", () => {
+    const result = parseJsonWithRegistry({
+      url: "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+      json: fixtureJson("knock/units.json"),
+    });
+
+    expect(result.parserName).toBe(knockDoorwayParser.name);
+    expect(result.items[0]?.baseRent).toBe(2450);
+  });
+
+  it("existing CmsSiteManager custom parser behavior remains intact", () => {
+    const result = parseJsonWithRegistry({
+      url: cmsUnitsUrl,
+      json: cmsJson(),
+    });
+
+    expect(result.parserName).toBe(cmsSiteManagerParser.name);
+    expect(result.items[0]?.baseRent).toBe(2719);
   });
 });
 

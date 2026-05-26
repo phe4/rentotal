@@ -1,0 +1,112 @@
+import type { DomainPriceParser, ParserResult } from "./priceParser.js";
+import {
+  normalizeEndpointForProfile,
+  parseWithPlatformProfile,
+  profileEndpointCanPromote,
+  profileMatchesUrl,
+  type PlatformProfile,
+} from "./platformProfile.js";
+
+export const cmsSiteManagerProfile: PlatformProfile = {
+  platform: "CmsSiteManager",
+  version: "1.0.0",
+  status: "APPROVED",
+  match: {
+    urlIncludes: ["/CmsSiteManager/callback.aspx"],
+    query: {
+      act: "Proxy/GetUnits",
+    },
+  },
+  response: {
+    format: "jsonp",
+    arrayPath: "units",
+  },
+  mapping: {
+    floorplanName: "floorplanName",
+    unitNumber: ["unitNumber", "name"],
+    bedrooms: "numberOfBeds",
+    bathrooms: "numberOfBaths",
+    sqft: "squareFeet",
+    baseRent: "rent",
+    leaseTermMonths: "minLeaseTermInMonth",
+    moveInDate: "internalAvailableDate",
+    mandatoryFees: "mandatoryFeesDeposits",
+    availabilityStatus: ["unitLeasedStatus", "leaseStatus"],
+  },
+  rawData: {
+    preserve: ["totalRent", "partnerName", "partnerPropertyId"],
+  },
+  rules: {
+    requiredFields: ["baseRent"],
+    numericFields: [
+      "baseRent",
+      "bedrooms",
+      "bathrooms",
+      "sqft",
+      "mandatoryFees",
+      "leaseTermMonths",
+    ],
+    minBaseRent: 300,
+    maxBaseRent: 20_000,
+    doNotUseAsBaseRent: ["totalRent"],
+  },
+  endpointPromotion: {
+    canPromote: true,
+    stripQueryParams: ["callback", "_"],
+    requiredParseableItems: 1,
+  },
+};
+
+export const platformProfiles: PlatformProfile[] = [cmsSiteManagerProfile];
+
+export function findApprovedProfile(input: {
+  url?: string;
+}): PlatformProfile | undefined {
+  return platformProfiles.find((profile) =>
+    profileMatchesUrl(profile, input.url),
+  );
+}
+
+export const platformProfileDomainParser: DomainPriceParser = {
+  name: "platform-profile-parser",
+  version: "1.0.0",
+  priority: 50,
+  canParse(input) {
+    return (
+      findApprovedProfile({ url: input.url ?? input.context?.url }) !==
+      undefined
+    );
+  },
+  parse(input): ParserResult {
+    const profile = findApprovedProfile({
+      url: input.url ?? input.context?.url,
+    });
+    if (!profile) {
+      return {
+        parserName: platformProfileDomainParser.name,
+        parserVersion: platformProfileDomainParser.version,
+        confidence: 0,
+        items: [],
+      };
+    }
+    const items = parseWithPlatformProfile({
+      profile,
+      url: input.url ?? input.context?.url,
+      text: input.text,
+      json: input.json,
+    });
+    return {
+      parserName: platformProfileDomainParser.name,
+      parserVersion: platformProfileDomainParser.version,
+      confidence: items.length > 0 ? 0.86 : 0.25,
+      items,
+      metadata: {
+        platform: profile.platform,
+        profileVersion: profile.version,
+      },
+    };
+  },
+};
+
+export { normalizeEndpointForProfile, profileEndpointCanPromote };
+export type { PlatformProfile };
