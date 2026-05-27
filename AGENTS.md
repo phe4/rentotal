@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 6D - Platform Profile Validation Tooling.
+Current phase: Phase 6E - Entrata Platform Profile.
 
 Build only:
 

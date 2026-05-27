@@ -16,6 +16,7 @@ import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
 import {
   cmsSiteManagerProfile,
+  entrataProfile,
   findProfileById,
   platformProfileDomainParser,
 } from "../src/parsers/platformProfileRegistry.js";
@@ -25,7 +26,11 @@ import {
   profileMatchesUrl,
   type PlatformProfile,
 } from "../src/parsers/platformProfile.js";
-import { cmsSiteManagerValidationCases } from "../src/parsers/platformProfileValidationCases.js";
+import {
+  cmsSiteManagerValidationCases,
+  entrataValidationCases,
+  platformProfileValidationCases,
+} from "../src/parsers/platformProfileValidationCases.js";
 import { validateProfileCase } from "../src/parsers/platformProfileValidation.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
 import type { PriceSnapshotRecord } from "../src/types.js";
@@ -2210,6 +2215,148 @@ describe("Phase 6D Platform Profile Validation Tooling", () => {
         },
       }),
     ).toThrow("Profile validation fixtures must be under test/fixtures.");
+  });
+});
+
+describe("Phase 6E Entrata Platform Profile", () => {
+  const availabilityUrl = "https://example.test/entrata/availability";
+  const floorplansUrl = "https://example.test/entrata/floorplans";
+
+  it("Entrata draft profile does not production-auto-match a strong Entrata URL", () => {
+    expect(entrataProfile.status).toBe("DRAFT");
+    expect(profileMatchesUrl(entrataProfile, availabilityUrl)).toBe(false);
+  });
+
+  it("Entrata profile matcher rejects unrelated URLs", () => {
+    expect(
+      profileMatchesUrl(
+        entrataProfile,
+        "https://example.test/api/availability",
+      ),
+    ).toBe(false);
+  });
+
+  it("Entrata draft profile maps unit-level data only in explicit validation mode", () => {
+    const items = parseWithPlatformProfile({
+      profile: entrataProfile,
+      url: availabilityUrl,
+      json: fixtureJson("entrata/availability.json"),
+      explicitValidationMode: true,
+    });
+
+    expect(items[0]).toMatchObject({
+      floorplanName: "A2",
+      unitNumber: "204",
+      bedrooms: 1,
+      bathrooms: 1,
+      sqft: 735,
+      baseRent: 2645,
+      effectiveRent: 2595,
+      leaseTermMonths: 12,
+      moveInDate: "2026-06-15",
+      specialOfferText: "2 weeks free",
+      specialOfferValue: 1220,
+      mandatoryFees: 65,
+      availabilityStatus: "AVAILABLE",
+    });
+  });
+
+  it("Entrata draft profile maps floorplan-level rent range conservatively in explicit validation mode", () => {
+    const items = parseWithPlatformProfile({
+      profile: entrataProfile,
+      url: floorplansUrl,
+      json: fixtureJson("entrata/floorplans.json"),
+      explicitValidationMode: true,
+    });
+    const rawData = items[0]?.rawData as Record<string, unknown>;
+
+    expect(items[0]).toMatchObject({
+      floorplanName: "A1",
+      bedrooms: 1,
+      bathrooms: 1,
+      sqft: 710,
+      baseRent: 2519,
+      availabilityStatus: "AVAILABLE",
+    });
+    expect(rawData.maxRent).toBe("2,779");
+  });
+
+  it("Entrata no-rent fixture creates no parsed items", () => {
+    const items = parseWithPlatformProfile({
+      profile: entrataProfile,
+      url: availabilityUrl,
+      json: fixtureJson("entrata/no-rent.json"),
+      explicitValidationMode: true,
+    });
+
+    expect(items).toHaveLength(0);
+  });
+
+  it("Entrata profile remains draft until real sample validation and human approval", () => {
+    const approvedProfile: PlatformProfile = {
+      ...entrataProfile,
+      status: "APPROVED",
+    };
+
+    expect(profileMatchesUrl(entrataProfile, availabilityUrl)).toBe(false);
+    expect(
+      parseWithPlatformProfile({
+        profile: entrataProfile,
+        url: availabilityUrl,
+        json: fixtureJson("entrata/availability.json"),
+      }),
+    ).toHaveLength(0);
+    expect(
+      validateProfileCase({
+        profile: entrataProfile,
+        profileCase: entrataValidationCases[0],
+      }),
+    ).toMatchObject({ passed: true, itemCount: 1 });
+    expect(profileMatchesUrl(approvedProfile, availabilityUrl)).toBe(true);
+  });
+
+  it("profile validation includes Entrata cases", () => {
+    const entrataCaseIds = platformProfileValidationCases
+      .filter((profileCase) => profileCase.profileId === entrataProfile.id)
+      .map((profileCase) => profileCase.name);
+
+    expect(entrataCaseIds).toEqual([
+      "Entrata unit-level availability",
+      "Entrata floorplan-level rent range",
+      "Entrata no-rent availability",
+    ]);
+  });
+
+  it("Entrata validation cases pass through existing tooling", () => {
+    const reports = entrataValidationCases.map((profileCase) =>
+      validateProfileCase({ profile: entrataProfile, profileCase }),
+    );
+
+    expect(reports.every((report) => report.passed)).toBe(true);
+  });
+
+  it("DRAFT Entrata profile parser does not run automatically when selected", () => {
+    const result = platformProfileDomainParser.parse({
+      url: availabilityUrl,
+      json: fixtureJson("entrata/availability.json"),
+    });
+
+    expect(result.parserName).toBe("platform-profile-parser");
+    expect(result.items).toHaveLength(0);
+  });
+
+  it("existing Knock and CmsSiteManager parser behavior remains intact", () => {
+    const knockResult = parseJsonWithRegistry({
+      url: "https://doorway-api.knockrentals.com/v1/property/2010930/units",
+      json: fixtureJson("knock/units.json"),
+    });
+    const cmsResult = parseJsonWithRegistry({
+      url: "https://www.fairwayglen.com/CmsSiteManager/callback.aspx?act=Proxy/GetUnits&siteid=1206682",
+      json: unwrapJsonp(fixtureText("cmssitemanager/units.jsonp")),
+    });
+
+    expect(knockResult.parserName).toBe(knockDoorwayParser.name);
+    expect(cmsResult.parserName).toBe(cmsSiteManagerParser.name);
   });
 });
 

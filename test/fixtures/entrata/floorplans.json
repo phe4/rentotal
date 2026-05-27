@@ -1,0 +1,17 @@
+{
+  "platform": "entrata",
+  "data": {
+    "items": [
+      {
+        "floorplanId": "fp-a1",
+        "floorplanName": "A1",
+        "beds": "1",
+        "baths": "1",
+        "squareFeet": "710",
+        "minRent": "2,519",
+        "maxRent": "2,779",
+        "status": "AVAILABLE"
+      }
+    ]
+  }
+}

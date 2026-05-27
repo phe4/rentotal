@@ -1,0 +1,17 @@
+{
+  "platform": "entrata",
+  "data": {
+    "items": [
+      {
+        "unitNumber": "301",
+        "floorplanName": "B1",
+        "bedrooms": "2",
+        "bathrooms": "2",
+        "sqft": "980",
+        "leaseTermMonths": "12",
+        "deposit": "800",
+        "availabilityStatus": "WAITLIST"
+      }
+    ]
+  }
+}

@@ -58,7 +58,70 @@ export const cmsSiteManagerProfile: PlatformProfile = {
   },
 };
 
-export const platformProfiles: PlatformProfile[] = [cmsSiteManagerProfile];
+export const entrataProfile: PlatformProfile = {
+  id: "entrata-availability-floorplans",
+  platform: "Entrata",
+  version: "1.0.0",
+  status: "DRAFT",
+  match: {
+    urlIncludes: ["entrata"],
+    urlIncludesAny: ["availability", "floorplans", "floorplan"],
+  },
+  response: {
+    format: "json",
+    arrayPath: "data.items",
+  },
+  mapping: {
+    floorplanName: ["floorplanName", "floorplan.name"],
+    unitNumber: ["unitNumber", "apartmentName"],
+    bedrooms: ["bedrooms", "beds"],
+    bathrooms: ["bathrooms", "baths"],
+    sqft: ["sqft", "squareFeet"],
+    baseRent: ["baseRent", "marketRent", "minRent"],
+    effectiveRent: "effectiveRent",
+    leaseTermMonths: "leaseTermMonths",
+    moveInDate: ["moveInDate", "availableDate"],
+    specialOfferText: ["specialOfferText", "concessionText"],
+    specialOfferValue: ["specialOfferValue", "concessionValue"],
+    mandatoryFees: "mandatoryFees",
+    availabilityStatus: ["availabilityStatus", "status"],
+  },
+  rawData: {
+    preserve: ["maxRent", "floorplanId", "unitId", "availabilityStatus"],
+  },
+  rules: {
+    requiredFields: ["baseRent"],
+    numericFields: [
+      "baseRent",
+      "effectiveRent",
+      "bedrooms",
+      "bathrooms",
+      "sqft",
+      "leaseTermMonths",
+      "specialOfferValue",
+      "mandatoryFees",
+    ],
+    minBaseRent: 300,
+    maxBaseRent: 20_000,
+    doNotUseAsBaseRent: [
+      "maxRent",
+      "deposit",
+      "applicationFee",
+      "leaseTermMonths",
+      "sqft",
+      "squareFeet",
+    ],
+  },
+  endpointPromotion: {
+    canPromote: true,
+    requiredParseableItems: 1,
+  },
+};
+
+export const platformProfiles: PlatformProfile[] = [
+  cmsSiteManagerProfile,
+  entrataProfile,
+];
 
 export function findApprovedProfile(input: {
   url?: string;

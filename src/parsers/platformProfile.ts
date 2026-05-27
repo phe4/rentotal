@@ -12,6 +12,7 @@ export type PlatformProfile = {
   status: PlatformProfileStatus;
   match: {
     urlIncludes?: string[];
+    urlIncludesAny?: string[];
     query?: Record<string, string>;
   };
   response: {
@@ -55,6 +56,13 @@ export function profileMatchesUrl(
   if (
     includes.length > 0 &&
     !includes.every((part) => lowerUrl.includes(part.toLowerCase()))
+  ) {
+    return false;
+  }
+  const includesAny = profile.match.urlIncludesAny ?? [];
+  if (
+    includesAny.length > 0 &&
+    !includesAny.some((part) => lowerUrl.includes(part.toLowerCase()))
   ) {
     return false;
   }

@@ -1,0 +1,23 @@
+{
+  "platform": "entrata",
+  "data": {
+    "items": [
+      {
+        "unitNumber": "204",
+        "unitId": "unit-204",
+        "floorplanName": "A2",
+        "bedrooms": "1",
+        "bathrooms": "1",
+        "sqft": "735",
+        "marketRent": "$2,645",
+        "effectiveRent": "2595",
+        "leaseTermMonths": "12",
+        "moveInDate": "2026-06-15",
+        "concessionText": "2 weeks free",
+        "concessionValue": "1220",
+        "mandatoryFees": "65",
+        "availabilityStatus": "AVAILABLE"
+      }
+    ]
+  }
+}

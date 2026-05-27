@@ -188,36 +188,41 @@ Out of scope:
 Goal:
 Add deterministic validation tooling for platform profiles using local fixtures and expected parsed output.
 
-Future only. Do not implement in Phase 6C.
-
-## Phase 6E: Entrata Profile
+## Phase 6E: Entrata Draft Profile
 
 Goal:
-Add an Entrata platform profile if fixture validation shows the structure is stable enough for mapping-based extraction.
+Add an Entrata platform profile draft using local fixtures and validation tooling.
 
-Future only. Do not implement in Phase 6C.
+Status:
+Draft-only. The current Entrata profile must not auto-run in production unless it is based on real sanitized Entrata sample data, validation passes, and a human explicitly approves it.
 
-## Phase 6F: Yardi Profile
-
-Goal:
-Add a Yardi platform profile if fixture validation shows the structure is stable enough for mapping-based extraction.
-
-Future only. Do not implement in Phase 6C.
-
-## Phase 6G: More Profiles Or Custom Adapters As Needed
+## Phase 6F: File-Based Profile Loading
 
 Goal:
-Improve accuracy for other common apartment platforms using either platform profiles or custom adapters, depending on complexity.
+Load platform profiles from reviewed local files instead of keeping every profile in code.
 
-Potential future targets:
+Future only.
 
-- Greystar
-- AvalonBay
-- Essex
-- UDR
-- Bozzuto
-- Windsor
-- EquityApartments
+## Phase 6G: Profile Draft Generation From Sample Data
+
+Goal:
+Generate or assist profile drafts from sanitized sample responses while keeping generated profiles in DRAFT status.
+
+Future only.
+
+## Phase 6H: Admin Review / Approval Workflow
+
+Goal:
+Add a review and approval workflow so humans can inspect profile drafts, fixtures, validation output, and safety notes before marking a profile APPROVED.
+
+Future only.
+
+## Phase 6I: Yardi Draft Profile From Sample Data
+
+Goal:
+Add a Yardi draft profile only from sanitized sample data and validation cases.
+
+Future only.
 
 ## Phase 7: Google Places and Map Discovery
 
