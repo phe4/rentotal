@@ -210,12 +210,12 @@ Generate or assist profile drafts from sanitized sample responses while keeping 
 
 Current preparation phase. Do not implement AI-generated drafts, Yardi, admin approval workflow, or automatic approval in this phase.
 
-## Phase 6H: Admin Review / Approval Workflow
+## Phase 6H: Platform Profile Approval Workflow
 
 Goal:
-Add a review and approval workflow so humans can inspect profile drafts, fixtures, validation output, and safety notes before marking a profile APPROVED.
+Add a local CLI approval workflow so a reviewed DRAFT profile can be copied to approved only after validation passes and explicit confirmation is provided.
 
-Future only.
+Current preparation phase. Do not implement UI, DB-backed profiles, AI-generated drafts, Yardi, or automatic approval in this phase.
 
 ## Phase 6I: Yardi Draft Profile From Sample Data
 

@@ -41,3 +41,15 @@ npm run profile:generate-draft -- --platform "Example" --profile-id "example-uni
 Generated profiles are written to `platform-profiles/generated` and always use `status: "DRAFT"`. The `--url` value is only a matching hint; it is not fetched.
 
 Review generated mappings before adding validation cases. A generated profile must remain DRAFT until fixture validation and human review are complete.
+
+## Local Approval Workflow
+
+Phase 6H can copy a reviewed generated DRAFT profile into the approved profile directory:
+
+```bash
+npm run profile:approve -- --profile-id example-units --confirm
+```
+
+Approval requires the profile to exist in `platform-profiles/generated`, use `status: "DRAFT"`, have validation cases, pass validation, and include explicit `--confirm`.
+
+The approval command writes an `APPROVED` copy under `platform-profiles/approved` and preserves the generated draft by default. It uses local files and fixtures only; it does not fetch remote URLs or execute profile content.

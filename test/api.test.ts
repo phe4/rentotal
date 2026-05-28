@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -22,6 +23,7 @@ import { parseGenericJsonRent } from "../src/parsers/genericJsonRentParser.js";
 import { unwrapJsonp } from "../src/parsers/jsonpUtils.js";
 import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
+import { approvePlatformProfile } from "../src/parsers/platformProfileApproval.js";
 import {
   detectArrayPathCandidates,
   generatePlatformProfileDraft,
@@ -2944,6 +2946,273 @@ describe("Phase 6G Profile Draft Generation From Sample Data", () => {
           profileRootDir: root,
         }),
       ).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Phase 6H Platform Profile Approval Workflow", () => {
+  const approvalUrl = "https://example.test/approval-platform/availability";
+
+  function tempApprovalRoot(): string {
+    const root = mkdtempSync(path.join(tmpdir(), "rentotal-approval-"));
+    mkdirSync(path.join(root, "generated"), { recursive: true });
+    mkdirSync(path.join(root, "approved"), { recursive: true });
+    return root;
+  }
+
+  function approvalProfile(
+    overrides: Partial<PlatformProfile> = {},
+  ): PlatformProfile {
+    return {
+      id: "approval-platform",
+      platform: "ApprovalPlatform",
+      version: "0.1.0",
+      status: "DRAFT",
+      ...overrides,
+      match: {
+        urlIncludes: ["approval-platform"],
+        urlIncludesAny: ["availability"],
+        ...overrides.match,
+      },
+      response: {
+        format: "json",
+        arrayPath: "data.items",
+        ...overrides.response,
+      },
+      mapping: {
+        baseRent: "marketRent",
+        floorplanName: "floorplanName",
+        unitNumber: "unitNumber",
+        ...overrides.mapping,
+      },
+      rules: {
+        requiredFields: ["baseRent"],
+        numericFields: ["baseRent"],
+        minBaseRent: 300,
+        maxBaseRent: 20_000,
+        ...overrides.rules,
+      },
+    };
+  }
+
+  function writeDraft(
+    root: string,
+    profile: PlatformProfile = approvalProfile(),
+  ): void {
+    writeFileSync(
+      path.join(root, "generated", `${profile.id}.draft.json`),
+      JSON.stringify(profile, null, 2),
+    );
+  }
+
+  function approvalCase(
+    overrides: Partial<(typeof entrataValidationCases)[number]> = {},
+  ) {
+    return {
+      name: "Approval profile validation",
+      profileId: "approval-platform",
+      input: {
+        url: approvalUrl,
+        contentType: "application/json",
+        fixturePath: "test/fixtures/entrata/availability.json",
+      },
+      expectedItems: [{ baseRent: 2645 }],
+      ...overrides,
+    };
+  }
+
+  it("approving a DRAFT profile with passing validation and confirm writes APPROVED file", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      const result = approvePlatformProfile({
+        profileId: "approval-platform",
+        confirm: true,
+        rootDir: root,
+        validationCases: [approvalCase()],
+      });
+      const approved = JSON.parse(readFileSync(result.approvedPath, "utf8"));
+
+      expect(result.approvedProfile.status).toBe("APPROVED");
+      expect(approved.status).toBe("APPROVED");
+      expect(result.approvedPath).toBe(
+        path.join(root, "approved", "approval-platform.approved.json"),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval preserves original draft file", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      const result = approvePlatformProfile({
+        profileId: "approval-platform",
+        confirm: true,
+        rootDir: root,
+        validationCases: [approvalCase()],
+      });
+
+      expect(existsSync(result.draftPath)).toBe(true);
+      expect(JSON.parse(readFileSync(result.draftPath, "utf8")).status).toBe(
+        "DRAFT",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approved output path is under platform-profiles approved directory", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      const result = approvePlatformProfile({
+        profileId: "approval-platform",
+        confirm: true,
+        rootDir: root,
+        validationCases: [approvalCase()],
+      });
+
+      expect(
+        path.relative(path.join(root, "approved"), result.approvedPath),
+      ).toBe("approval-platform.approved.json");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval fails without confirm", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "approval-platform",
+          confirm: false,
+          rootDir: root,
+          validationCases: [approvalCase()],
+        }),
+      ).toThrow("Approval requires explicit --confirm.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval fails if profile status is DISABLED", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root, approvalProfile({ status: "DISABLED" }));
+
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "approval-platform",
+          confirm: true,
+          rootDir: root,
+          validationCases: [approvalCase()],
+        }),
+      ).toThrow("DISABLED profiles cannot be approved.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval fails if profile is already APPROVED", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root, approvalProfile({ status: "APPROVED" }));
+
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "approval-platform",
+          confirm: true,
+          rootDir: root,
+          validationCases: [approvalCase()],
+        }),
+      ).toThrow("APPROVED profiles cannot be approved again.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval fails if validation case is missing", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "approval-platform",
+          confirm: true,
+          rootDir: root,
+          validationCases: [],
+        }),
+      ).toThrow("No validation case found for profile approval-platform.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approval fails if validation fails", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "approval-platform",
+          confirm: true,
+          rootDir: root,
+          validationCases: [
+            approvalCase({ expectedItems: [{ baseRent: 9999 }] }),
+          ],
+        }),
+      ).toThrow("Profile validation failed:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("path traversal is rejected", () => {
+    const root = tempApprovalRoot();
+    try {
+      expect(() =>
+        approvePlatformProfile({
+          profileId: "../approval-platform",
+          confirm: true,
+          rootDir: root,
+          validationCases: [approvalCase()],
+        }),
+      ).toThrow("profileId must be filename-safe.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("approved profile can production auto-run after loading from approved", () => {
+    const root = tempApprovalRoot();
+    try {
+      writeDraft(root);
+      approvePlatformProfile({
+        profileId: "approval-platform",
+        confirm: true,
+        rootDir: root,
+        validationCases: [approvalCase()],
+      });
+
+      const approvedProfile = findApprovedProfile({
+        url: approvalUrl,
+        profileRootDir: root,
+      });
+
+      expect(approvedProfile?.id).toBe("approval-platform");
+      expect(approvedProfile?.status).toBe("APPROVED");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
