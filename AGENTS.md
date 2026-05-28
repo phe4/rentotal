@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 6H - Platform Profile Approval Workflow.
+Current phase: Phase 7A - Scheduled Price Check Worker.
 
 Build only:
 

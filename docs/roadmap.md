@@ -201,21 +201,28 @@ Draft-only. The current Entrata profile must not auto-run in production unless i
 Goal:
 Load platform profiles from reviewed local files instead of keeping every profile in code.
 
-Current preparation phase. Do not implement profile draft generation, admin approval workflow, Yardi, or AI in this phase.
+Complete.
 
 ## Phase 6G: Profile Draft Generation From Sample Data
 
 Goal:
 Generate or assist profile drafts from sanitized sample responses while keeping generated profiles in DRAFT status.
 
-Current preparation phase. Do not implement AI-generated drafts, Yardi, admin approval workflow, or automatic approval in this phase.
+Complete.
 
 ## Phase 6H: Platform Profile Approval Workflow
 
 Goal:
 Add a local CLI approval workflow so a reviewed DRAFT profile can be copied to approved only after validation passes and explicit confirmation is provided.
 
-Current preparation phase. Do not implement UI, DB-backed profiles, AI-generated drafts, Yardi, or automatic approval in this phase.
+Complete.
+
+## Phase 7A: Scheduled Price Check Worker
+
+Goal:
+Add a local/manual price-check runner foundation that can later be called by cron, cloud scheduler, BullMQ, or Airflow.
+
+Current preparation phase. Do not implement cloud scheduling, persistent queues, new scraping behavior, Yardi, AI, maps, frontend, or notification delivery in this phase.
 
 ## Phase 6I: Yardi Draft Profile From Sample Data
 
