@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import request from "supertest";
@@ -3022,6 +3023,185 @@ describe("Phase 6H Platform Profile Approval Workflow", () => {
       ...overrides,
     };
   }
+
+  function runNpm(args: string[]): string {
+    const command = process.platform === "win32" ? "cmd.exe" : "npm";
+    const commandArgs =
+      process.platform === "win32" ? ["/c", "npm.cmd", ...args] : args;
+    return execFileSync(command, commandArgs, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  it("validates the full local generate, validate, approve, and production-load lifecycle", () => {
+    const root = tempApprovalRoot();
+    const profileId = "lifecycle-generated-profile";
+    const profileUrl = "https://example.test/lifecycle/availability";
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const generated = generatePlatformProfileDraft({
+        platform: "LifecyclePlatform",
+        profileId,
+        samplePath: "test/fixtures/entrata/availability.json",
+        sampleUrl: profileUrl,
+        outputRootDir: root,
+      });
+      const generatedProfile = JSON.parse(
+        readFileSync(generated.outputPath, "utf8"),
+      ) as PlatformProfile;
+
+      expect(generatedProfile.status).toBe("DRAFT");
+      expect(generated.outputPath).toBe(
+        path.join(root, "generated", `${profileId}.draft.json`),
+      );
+      expect(
+        findApprovedProfile({ url: profileUrl, profileRootDir: root }),
+      ).toBeUndefined();
+
+      const draftProfile = loadValidationFileProfiles({
+        rootDir: root,
+      }).profiles.find((profile) => profile.id === profileId);
+      const profileCase = {
+        name: "Lifecycle generated profile validation",
+        profileId,
+        input: {
+          url: profileUrl,
+          contentType: "application/json",
+          fixturePath: "test/fixtures/entrata/availability.json",
+        },
+        expectedItems: [{ baseRent: 2645 }],
+      };
+      const validationReport = validateProfileCase({
+        profile: draftProfile!,
+        profileCase,
+      });
+
+      expect(draftProfile?.status).toBe("DRAFT");
+      expect(validationReport).toEqual(
+        expect.objectContaining({ passed: true, itemCount: 1 }),
+      );
+
+      const approved = approvePlatformProfile({
+        profileId,
+        confirm: true,
+        rootDir: root,
+        validationCases: [profileCase],
+      });
+      const approvedFile = JSON.parse(
+        readFileSync(approved.approvedPath, "utf8"),
+      ) as PlatformProfile;
+
+      expect(approved.approvedPath).toBe(
+        path.join(root, "approved", `${profileId}.approved.json`),
+      );
+      expect(existsSync(approved.draftPath)).toBe(true);
+      expect(JSON.parse(readFileSync(approved.draftPath, "utf8")).status).toBe(
+        "DRAFT",
+      );
+      expect(approvedFile.status).toBe("APPROVED");
+      expect(
+        findApprovedProfile({ url: profileUrl, profileRootDir: root })?.id,
+      ).toBe(profileId);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("validates the real npm script lifecycle against a temp profile root", () => {
+    const root = tempApprovalRoot();
+    const profileId = "entrata-availability-floorplans";
+    const profileUrl = "https://example.test/entrata/availability";
+    try {
+      const generateOutput = runNpm([
+        "run",
+        "profile:generate-draft",
+        "--",
+        "--platform",
+        "Entrata",
+        "--profile-id",
+        profileId,
+        "--sample",
+        "test/fixtures/entrata/availability.json",
+        "--url",
+        profileUrl,
+        "--profile-root",
+        root,
+      ]);
+      const draftPath = path.join(root, "generated", `${profileId}.draft.json`);
+      const draftProfile = JSON.parse(
+        readFileSync(draftPath, "utf8"),
+      ) as PlatformProfile;
+
+      expect(generateOutput).toContain("Generated DRAFT profile:");
+      expect(draftProfile.status).toBe("DRAFT");
+      expect(
+        findApprovedProfile({ url: profileUrl, profileRootDir: root }),
+      ).toBeUndefined();
+
+      // Simulate the required human review/edit step before approval by replacing
+      // the generated draft with a validation-backed draft profile in the temp root.
+      writeFileSync(
+        draftPath,
+        `${JSON.stringify({ ...entrataProfile, status: "DRAFT" }, null, 2)}\n`,
+      );
+
+      const validateOutput = runNpm([
+        "run",
+        "profile:validate",
+        "--",
+        "--profile-root",
+        root,
+      ]);
+      expect(validateOutput).toContain(
+        "PASS entrata-availability-floorplans - Entrata unit-level availability",
+      );
+
+      expect(() =>
+        runNpm([
+          "run",
+          "profile:approve",
+          "--",
+          "--profile-id",
+          profileId,
+          "--profile-root",
+          root,
+        ]),
+      ).toThrow();
+
+      const approveOutput = runNpm([
+        "run",
+        "profile:approve",
+        "--",
+        "--profile-id",
+        profileId,
+        "--confirm",
+        "--profile-root",
+        root,
+      ]);
+      const approvedPath = path.join(
+        root,
+        "approved",
+        `${profileId}.approved.json`,
+      );
+      const approvedProfile = JSON.parse(
+        readFileSync(approvedPath, "utf8"),
+      ) as PlatformProfile;
+
+      expect(approveOutput).toContain("Approved profile written:");
+      expect(existsSync(draftPath)).toBe(true);
+      expect(JSON.parse(readFileSync(draftPath, "utf8")).status).toBe("DRAFT");
+      expect(approvedProfile.status).toBe("APPROVED");
+      expect(
+        findApprovedProfile({ url: profileUrl, profileRootDir: root })?.id,
+      ).toBe(profileId);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("approving a DRAFT profile with passing validation and confirm writes APPROVED file", () => {
     const root = tempApprovalRoot();

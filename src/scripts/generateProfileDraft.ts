@@ -4,7 +4,7 @@ const args = parseArgs(process.argv.slice(2));
 
 if (!args.platform || !args.profileId || !args.samplePath) {
   console.error(
-    'Usage: npm run profile:generate-draft -- --platform "Example" --profile-id "example-units" --sample test/fixtures/example/units.json [--url "https://example.com/api/units" (matching hint only, not fetched)] [--format json|jsonp]',
+    'Usage: npm run profile:generate-draft -- --platform "Example" --profile-id "example-units" --sample test/fixtures/example/units.json [--url "https://example.com/api/units" (matching hint only, not fetched)] [--format json|jsonp] [--profile-root platform-profiles]',
   );
   process.exitCode = 1;
 } else {
@@ -15,6 +15,7 @@ if (!args.platform || !args.profileId || !args.samplePath) {
       samplePath: args.samplePath,
       sampleUrl: args.sampleUrl,
       responseFormat: args.responseFormat,
+      outputRootDir: args.profileRoot,
     });
     console.log(`Generated DRAFT profile: ${result.outputPath}`);
   } catch (error) {
@@ -31,6 +32,7 @@ function parseArgs(argv: string[]): {
   samplePath?: string;
   sampleUrl?: string;
   responseFormat?: "json" | "jsonp";
+  profileRoot?: string;
 } {
   const parsed: ReturnType<typeof parseArgs> = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -41,6 +43,7 @@ function parseArgs(argv: string[]): {
     if (key === "--profile-id") parsed.profileId = value;
     if (key === "--sample") parsed.samplePath = value;
     if (key === "--url") parsed.sampleUrl = value;
+    if (key === "--profile-root") parsed.profileRoot = value;
     if (key === "--format" && (value === "json" || value === "jsonp")) {
       parsed.responseFormat = value;
     }

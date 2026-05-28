@@ -140,12 +140,11 @@ export function findProfileById(
   profileId: string,
   input: { includeFileProfiles?: boolean; profileRootDir?: string } = {},
 ): PlatformProfile | undefined {
+  const fileProfiles = input.includeFileProfiles
+    ? loadValidationFileProfiles({ rootDir: input.profileRootDir }).profiles
+    : [];
   const profiles = input.includeFileProfiles
-    ? [
-        ...platformProfiles,
-        ...loadValidationFileProfiles({ rootDir: input.profileRootDir })
-          .profiles,
-      ]
+    ? [...fileProfiles, ...platformProfiles]
     : platformProfiles;
   return profiles.find((profile) => profile.id === profileId);
 }

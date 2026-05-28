@@ -14,22 +14,22 @@ The long-term profile workflow is:
 
 ```text
 sample data
-↓
+->
 generate DRAFT profile
-↓
+->
 run validation
-↓
+->
 human review
-↓
+->
 approve profile
-↓
+->
 production runtime can auto-use profile
 ```
 
 Phase 6H covers only:
 
 ```text
-validated DRAFT profile + explicit approval → APPROVED file profile
+validated DRAFT profile + explicit approval -> APPROVED file profile
 ```
 
 ## In Scope
@@ -93,7 +93,7 @@ Prefer copy behavior:
 
 ```text
 platform-profiles/generated/example.draft.json
-↓ copy with status changed
+-> copy with status changed
 platform-profiles/approved/example.approved.json
 ```
 
@@ -105,7 +105,7 @@ Example:
 
 ```text
 example-units.draft.json
-→
+->
 example-units.approved.json
 ```
 
@@ -172,7 +172,7 @@ Add tests for:
 8. approval fails if validation fails.
 9. path traversal is rejected.
 10. approved profile can production auto-run after loading from `approved`.
-11. existing Phase 1–6G tests still pass.
+11. existing Phase 1-6G tests still pass.
 
 Tests must use local temp files only and must not hit real external websites.
 
@@ -193,11 +193,3 @@ Phase 6H is complete when:
 - approved file profiles can production auto-run
 - docs explain approval workflow
 - lint, format, profile validation, tests, Prisma generate, and Prisma validate pass
-
-```
-
-After making documentation changes:
-- Run formatter if configured.
-- Do not implement source code.
-- Summarize changed files.
-```

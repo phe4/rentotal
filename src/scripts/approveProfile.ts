@@ -5,7 +5,7 @@ const args = parseArgs(process.argv.slice(2));
 
 if (!args.profileId) {
   console.error(
-    "Usage: npm run profile:approve -- --profile-id example-units --confirm",
+    "Usage: npm run profile:approve -- --profile-id example-units --confirm [--profile-root platform-profiles]",
   );
   process.exitCode = 1;
 } else {
@@ -13,6 +13,7 @@ if (!args.profileId) {
     const result = approvePlatformProfile({
       profileId: args.profileId,
       confirm: args.confirm,
+      rootDir: args.profileRoot,
       validationCases: platformProfileValidationCases,
     });
     console.log(`Approved profile written: ${result.approvedPath}`);
@@ -25,8 +26,13 @@ if (!args.profileId) {
   }
 }
 
-function parseArgs(argv: string[]): { profileId?: string; confirm: boolean } {
-  const parsed: { profileId?: string; confirm: boolean } = { confirm: false };
+function parseArgs(argv: string[]): {
+  profileId?: string;
+  confirm: boolean;
+  profileRoot?: string;
+} {
+  const parsed: { profileId?: string; confirm: boolean; profileRoot?: string } =
+    { confirm: false };
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     const value = argv[index + 1];
@@ -36,6 +42,10 @@ function parseArgs(argv: string[]): { profileId?: string; confirm: boolean } {
     }
     if (key === "--profile-id" && value) {
       parsed.profileId = value;
+      index += 1;
+    }
+    if (key === "--profile-root" && value) {
+      parsed.profileRoot = value;
       index += 1;
     }
   }
