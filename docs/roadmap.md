@@ -201,14 +201,14 @@ Draft-only. The current Entrata profile must not auto-run in production unless i
 Goal:
 Load platform profiles from reviewed local files instead of keeping every profile in code.
 
-Future only.
+Current preparation phase. Do not implement profile draft generation, admin approval workflow, Yardi, or AI in this phase.
 
 ## Phase 6G: Profile Draft Generation From Sample Data
 
 Goal:
 Generate or assist profile drafts from sanitized sample responses while keeping generated profiles in DRAFT status.
 
-Future only.
+Current preparation phase. Do not implement AI-generated drafts, Yardi, admin approval workflow, or automatic approval in this phase.
 
 ## Phase 6H: Admin Review / Approval Workflow
 

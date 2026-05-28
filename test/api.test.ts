@@ -1,4 +1,12 @@
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -15,9 +23,21 @@ import { unwrapJsonp } from "../src/parsers/jsonpUtils.js";
 import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
 import {
+  detectArrayPathCandidates,
+  generatePlatformProfileDraft,
+  suggestMapping,
+} from "../src/parsers/platformProfileDraftGenerator.js";
+import {
+  loadApprovedFileProfiles,
+  loadPlatformProfileFile,
+  loadValidationFileProfiles,
+} from "../src/parsers/platformProfileFileLoader.js";
+import {
   cmsSiteManagerProfile,
   entrataProfile,
   findProfileById,
+  findApprovedProfile,
+  getProductionProfiles,
   platformProfileDomainParser,
 } from "../src/parsers/platformProfileRegistry.js";
 import {
@@ -2357,6 +2377,576 @@ describe("Phase 6E Entrata Platform Profile", () => {
 
     expect(knockResult.parserName).toBe(knockDoorwayParser.name);
     expect(cmsResult.parserName).toBe(cmsSiteManagerParser.name);
+  });
+});
+
+describe("Phase 6F File-Based Platform Profile Loading", () => {
+  const availabilityUrl = "https://example.test/file-platform/availability";
+
+  function tempProfileRoot(): string {
+    const root = mkdtempSync(path.join(tmpdir(), "rentotal-profiles-"));
+    mkdirSync(path.join(root, "approved"), { recursive: true });
+    mkdirSync(path.join(root, "generated"), { recursive: true });
+    return root;
+  }
+
+  function writeProfileFile(input: {
+    root: string;
+    bucket: "approved" | "generated";
+    fileName: string;
+    profile: PlatformProfile;
+  }): void {
+    writeFileSync(
+      path.join(input.root, input.bucket, input.fileName),
+      JSON.stringify(input.profile, null, 2),
+    );
+  }
+
+  function fileProfile(
+    overrides: Partial<PlatformProfile> = {},
+  ): PlatformProfile {
+    return {
+      id: "file-platform-availability",
+      platform: "FilePlatform",
+      version: "1.0.0",
+      status: "APPROVED",
+      ...overrides,
+      match: {
+        urlIncludes: ["file-platform"],
+        urlIncludesAny: ["availability"],
+        ...overrides.match,
+      },
+      response: {
+        format: "json",
+        arrayPath: "data.items",
+        ...overrides.response,
+      },
+      mapping: {
+        floorplanName: "floorplanName",
+        unitNumber: "unitNumber",
+        baseRent: "rent",
+        bedrooms: "bedrooms",
+        bathrooms: "bathrooms",
+        ...overrides.mapping,
+      },
+      rules: {
+        requiredFields: ["baseRent"],
+        numericFields: ["baseRent", "bedrooms", "bathrooms"],
+        minBaseRent: 300,
+        maxBaseRent: 20_000,
+        ...overrides.rules,
+      },
+    };
+  }
+
+  afterEach(() => {
+    // Individual tests clean their temp roots; this hook keeps the global setup untouched.
+  });
+
+  it("approved file-based profile loads and can auto-match", () => {
+    const root = tempProfileRoot();
+    try {
+      writeProfileFile({
+        root,
+        bucket: "approved",
+        fileName: "file-platform.approved.json",
+        profile: fileProfile(),
+      });
+
+      const approved = loadApprovedFileProfiles({ rootDir: root });
+      const profile = findApprovedProfile({
+        url: availabilityUrl,
+        profileRootDir: root,
+      });
+
+      expect(approved.errors).toEqual([]);
+      expect(approved.profiles).toHaveLength(1);
+      expect(profile?.id).toBe("file-platform-availability");
+      expect(getProductionProfiles({ rootDir: root })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "file-platform-availability" }),
+        ]),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("DRAFT file-based profile does not production auto-match", () => {
+    const root = tempProfileRoot();
+    try {
+      writeProfileFile({
+        root,
+        bucket: "generated",
+        fileName: "file-platform.draft.json",
+        profile: fileProfile({ status: "DRAFT" }),
+      });
+
+      expect(
+        findApprovedProfile({ url: availabilityUrl, profileRootDir: root }),
+      ).toBeUndefined();
+      expect(loadApprovedFileProfiles({ rootDir: root }).profiles).toHaveLength(
+        0,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("DRAFT file-based profile can be explicitly validated", () => {
+    const root = tempProfileRoot();
+    try {
+      const profileCase = {
+        name: "File profile draft validation",
+        profileId: "file-platform-availability",
+        input: {
+          url: availabilityUrl,
+          contentType: "application/json",
+          fixturePath: "test/fixtures/entrata/availability.json",
+        },
+        expectedItems: [{ baseRent: 2645 }],
+      };
+      writeProfileFile({
+        root,
+        bucket: "generated",
+        fileName: "file-platform.draft.json",
+        profile: fileProfile({
+          status: "DRAFT",
+          mapping: { baseRent: "marketRent" },
+        }),
+      });
+
+      const profile = findProfileById(profileCase.profileId, {
+        includeFileProfiles: true,
+        profileRootDir: root,
+      });
+
+      expect(profile?.status).toBe("DRAFT");
+      expect(validateProfileCase({ profile: profile!, profileCase })).toEqual(
+        expect.objectContaining({ passed: true, itemCount: 1 }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("DISABLED file-based profile can be explicitly validated", () => {
+    const root = tempProfileRoot();
+    try {
+      const profileCase = {
+        name: "File profile disabled validation",
+        profileId: "file-platform-availability",
+        input: {
+          url: availabilityUrl,
+          contentType: "application/json",
+          fixturePath: "test/fixtures/entrata/availability.json",
+        },
+        expectedItems: [{ baseRent: 2645 }],
+      };
+      writeProfileFile({
+        root,
+        bucket: "generated",
+        fileName: "file-platform.disabled.json",
+        profile: fileProfile({
+          status: "DISABLED",
+          mapping: { baseRent: "marketRent" },
+        }),
+      });
+
+      const profile = findProfileById(profileCase.profileId, {
+        includeFileProfiles: true,
+        profileRootDir: root,
+      });
+
+      expect(profile?.status).toBe("DISABLED");
+      expect(validateProfileCase({ profile: profile!, profileCase })).toEqual(
+        expect.objectContaining({ passed: true, itemCount: 1 }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("DISABLED file-based profile does not production auto-match", () => {
+    const root = tempProfileRoot();
+    try {
+      writeProfileFile({
+        root,
+        bucket: "approved",
+        fileName: "file-platform.disabled.json",
+        profile: fileProfile({ status: "DISABLED" }),
+      });
+
+      expect(
+        findApprovedProfile({ url: availabilityUrl, profileRootDir: root }),
+      ).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("invalid profile file returns a clear validation error", () => {
+    const root = tempProfileRoot();
+    try {
+      writeFileSync(
+        path.join(root, "approved", "invalid.approved.json"),
+        JSON.stringify({ id: "invalid-profile", status: "APPROVED" }),
+      );
+
+      const result = loadApprovedFileProfiles({ rootDir: root });
+
+      expect(result.profiles).toHaveLength(0);
+      expect(result.errors[0]?.message).toContain(
+        "platform must be a non-empty string",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("path traversal outside platform-profiles is rejected", () => {
+    const root = tempProfileRoot();
+    try {
+      expect(() =>
+        loadPlatformProfileFile({
+          rootDir: root,
+          relativePath: "../outside.json",
+        }),
+      ).toThrow(
+        "Profile path traversal outside platform-profiles is not allowed.",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("single file loading rejects paths outside approved or generated", () => {
+    const root = tempProfileRoot();
+    try {
+      writeFileSync(
+        path.join(root, "loose.json"),
+        JSON.stringify(fileProfile()),
+      );
+
+      expect(() =>
+        loadPlatformProfileFile({
+          rootDir: root,
+          relativePath: "loose.json",
+        }),
+      ).toThrow("Profile files must be under approved or generated.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("non-JSON files are ignored safely", () => {
+    const root = tempProfileRoot();
+    try {
+      writeFileSync(path.join(root, "approved", "notes.txt"), "not json");
+
+      const result = loadApprovedFileProfiles({ rootDir: root });
+
+      expect(result).toEqual({ profiles: [], errors: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("code-based profiles still work", () => {
+    expect(
+      getProductionProfiles().some(
+        (profile) => profile.id === cmsSiteManagerProfile.id,
+      ),
+    ).toBe(true);
+    expect(
+      findProfileById(entrataProfile.id, { includeFileProfiles: true })?.status,
+    ).toBe("DRAFT");
+  });
+
+  it("validation loader can read approved and generated profiles", () => {
+    const root = tempProfileRoot();
+    try {
+      writeProfileFile({
+        root,
+        bucket: "approved",
+        fileName: "approved.approved.json",
+        profile: fileProfile({ id: "approved-file-profile" }),
+      });
+      writeProfileFile({
+        root,
+        bucket: "generated",
+        fileName: "draft.draft.json",
+        profile: fileProfile({ id: "draft-file-profile", status: "DRAFT" }),
+      });
+
+      const result = loadValidationFileProfiles({ rootDir: root });
+
+      expect(result.errors).toEqual([]);
+      expect(result.profiles.map((profile) => profile.id).sort()).toEqual([
+        "approved-file-profile",
+        "draft-file-profile",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("invalid rules fail with clear validation errors", () => {
+    const root = tempProfileRoot();
+    try {
+      writeProfileFile({
+        root,
+        bucket: "approved",
+        fileName: "bad-rules.approved.json",
+        profile: fileProfile({
+          rules: {
+            requiredFields: ["baseRent"],
+            minBaseRent: 20000,
+            maxBaseRent: 300,
+          },
+        }),
+      });
+
+      const result = loadApprovedFileProfiles({ rootDir: root });
+
+      expect(result.profiles).toHaveLength(0);
+      expect(result.errors[0]?.message).toContain(
+        "rules.maxBaseRent must be greater than or equal to rules.minBaseRent",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Phase 6G Profile Draft Generation From Sample Data", () => {
+  function tempProfileRoot(): string {
+    return mkdtempSync(path.join(tmpdir(), "rentotal-draft-profiles-"));
+  }
+
+  it("generator creates DRAFT profile from JSON fixture", () => {
+    const root = tempProfileRoot();
+    try {
+      const result = generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "generated-entrata-units",
+        samplePath: "test/fixtures/entrata/availability.json",
+        sampleUrl: "https://example.test/entrata/availability",
+        outputRootDir: root,
+      });
+
+      expect(result.profile).toMatchObject({
+        id: "generated-entrata-units",
+        platform: "Entrata",
+        status: "DRAFT",
+        response: { format: "json", arrayPath: "data.items" },
+      });
+      expect(result.profile.mapping.baseRent).toBe("marketRent");
+      expect(result.outputPath).toBe(
+        path.join(root, "generated", "generated-entrata-units.draft.json"),
+      );
+      expect(JSON.parse(readFileSync(result.outputPath, "utf8")).status).toBe(
+        "DRAFT",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("generator creates DRAFT profile from JSONP fixture", () => {
+    const root = tempProfileRoot();
+    try {
+      const result = generatePlatformProfileDraft({
+        platform: "CmsSiteManager",
+        profileId: "generated-cms-units",
+        samplePath: "test/fixtures/cmssitemanager/units.jsonp",
+        sampleUrl:
+          "https://example.test/CmsSiteManager/callback.aspx?act=Proxy/GetUnits",
+        outputRootDir: root,
+      });
+
+      expect(result.profile.status).toBe("DRAFT");
+      expect(result.profile.response).toMatchObject({
+        format: "jsonp",
+        arrayPath: "units",
+      });
+      expect(result.profile.mapping.baseRent).toBe("rent");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("generated profile is written under platform-profiles/generated", () => {
+    const root = tempProfileRoot();
+    try {
+      const result = generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "generated-output-check",
+        samplePath: "test/fixtures/entrata/availability.json",
+        outputRootDir: root,
+      });
+
+      expect(path.relative(root, result.outputPath)).toBe(
+        path.join("generated", "generated-output-check.draft.json"),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("generated profile never has APPROVED status", () => {
+    const root = tempProfileRoot();
+    try {
+      const result = generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "never-approved",
+        samplePath: "test/fixtures/entrata/availability.json",
+        outputRootDir: root,
+      });
+
+      expect(result.profile.status).toBe("DRAFT");
+      expect(result.profile.status).not.toBe("APPROVED");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("generator rejects sample paths outside allowed directories", () => {
+    const root = tempProfileRoot();
+    try {
+      expect(() =>
+        generatePlatformProfileDraft({
+          platform: "Unsafe",
+          profileId: "unsafe",
+          samplePath: "README.md",
+          outputRootDir: root,
+        }),
+      ).toThrow(
+        "Sample path must be under an allowed fixture/sample directory.",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("generator does not fetch sampleUrl", () => {
+    const root = tempProfileRoot();
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "no-fetch",
+        samplePath: "test/fixtures/entrata/availability.json",
+        sampleUrl: "https://example.test/entrata/availability",
+        outputRootDir: root,
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("arrayPath detection picks a units-like array", () => {
+    const candidates = detectArrayPathCandidates({
+      meta: [{ id: "tracking-1" }],
+      nested: {
+        units: [
+          {
+            unitNumber: "101",
+            rent: "2500",
+            bedrooms: "1",
+            bathrooms: "1",
+          },
+        ],
+      },
+    });
+
+    expect(candidates[0]?.path).toBe("nested.units");
+  });
+
+  it("field mapping suggests safe baseRent fields but not unsafe rent-like fields", () => {
+    expect(
+      suggestMapping([{ rent: "2500", totalRent: "2600", id: "abc" }]).baseRent,
+    ).toBe("rent");
+    expect(
+      suggestMapping([{ minRent: "2400", squareFeet: "710" }]).baseRent,
+    ).toBe("minRent");
+
+    for (const unsafeKey of [
+      "totalRent",
+      "id",
+      "propertyId",
+      "siteId",
+      "phone",
+      "sqft",
+      "squareFeet",
+      "leaseTerm",
+      "deposit",
+      "fee",
+      "applicationFee",
+      "parkingFee",
+      "trackingId",
+    ]) {
+      expect(
+        suggestMapping([{ [unsafeKey]: "2600" }]).baseRent,
+      ).toBeUndefined();
+    }
+  });
+
+  it("generated draft profile can be explicitly validated after expected output is added", () => {
+    const root = tempProfileRoot();
+    try {
+      generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "validate-generated",
+        samplePath: "test/fixtures/entrata/availability.json",
+        outputRootDir: root,
+      });
+      const profile = loadValidationFileProfiles({
+        rootDir: root,
+      }).profiles.find((item) => item.id === "validate-generated");
+      const profileCase = {
+        name: "Generated draft validation",
+        profileId: "validate-generated",
+        input: {
+          url: "https://example.test/entrata/availability",
+          contentType: "application/json",
+          fixturePath: "test/fixtures/entrata/availability.json",
+        },
+        expectedItems: [{ baseRent: 2645 }],
+      };
+
+      expect(profile?.status).toBe("DRAFT");
+      expect(validateProfileCase({ profile: profile!, profileCase })).toEqual(
+        expect.objectContaining({ passed: true, itemCount: 1 }),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("production runtime does not auto-run generated DRAFT profile", () => {
+    const root = tempProfileRoot();
+    try {
+      generatePlatformProfileDraft({
+        platform: "Entrata",
+        profileId: "generated-no-auto-run",
+        samplePath: "test/fixtures/entrata/availability.json",
+        sampleUrl: "https://example.test/entrata/availability",
+        outputRootDir: root,
+      });
+
+      expect(
+        findApprovedProfile({
+          url: "https://example.test/entrata/availability",
+          profileRootDir: root,
+        }),
+      ).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

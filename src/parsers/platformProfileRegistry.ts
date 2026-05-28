@@ -1,5 +1,9 @@
 import type { DomainPriceParser, ParserResult } from "./priceParser.js";
 import {
+  loadApprovedFileProfiles,
+  loadValidationFileProfiles,
+} from "./platformProfileFileLoader.js";
+import {
   normalizeEndpointForProfile,
   parseWithPlatformProfile,
   profileEndpointCanPromote,
@@ -125,16 +129,34 @@ export const platformProfiles: PlatformProfile[] = [
 
 export function findApprovedProfile(input: {
   url?: string;
+  profileRootDir?: string;
 }): PlatformProfile | undefined {
-  return platformProfiles.find((profile) =>
-    profileMatchesUrl(profile, input.url),
+  return getProductionProfiles({ rootDir: input.profileRootDir }).find(
+    (profile) => profileMatchesUrl(profile, input.url),
   );
 }
 
 export function findProfileById(
   profileId: string,
+  input: { includeFileProfiles?: boolean; profileRootDir?: string } = {},
 ): PlatformProfile | undefined {
-  return platformProfiles.find((profile) => profile.id === profileId);
+  const profiles = input.includeFileProfiles
+    ? [
+        ...platformProfiles,
+        ...loadValidationFileProfiles({ rootDir: input.profileRootDir })
+          .profiles,
+      ]
+    : platformProfiles;
+  return profiles.find((profile) => profile.id === profileId);
+}
+
+export function getProductionProfiles(
+  input: { rootDir?: string } = {},
+): PlatformProfile[] {
+  return [
+    ...platformProfiles,
+    ...loadApprovedFileProfiles({ rootDir: input.rootDir }).profiles,
+  ];
 }
 
 export const platformProfileDomainParser: DomainPriceParser = {

@@ -10,6 +10,7 @@
     "test": "vitest run",
     "format": "prettier --write .",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "profile:generate-draft": "tsx src/scripts/generateProfileDraft.ts",
     "profile:validate": "tsx src/scripts/validateProfiles.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"

@@ -3,7 +3,9 @@ import { platformProfileValidationCases } from "../parsers/platformProfileValida
 import { validateProfileCase } from "../parsers/platformProfileValidation.js";
 
 const reports = platformProfileValidationCases.map((profileCase) => {
-  const profile = findProfileById(profileCase.profileId);
+  const profile = findProfileById(profileCase.profileId, {
+    includeFileProfiles: true,
+  });
   if (!profile) {
     return {
       passed: false,
