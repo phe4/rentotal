@@ -250,7 +250,14 @@ Complete.
 Goal:
 Add a per-watch-item tracking summary endpoint that aggregates latest price, source health, recent price-check status, and alerts for a single watch item.
 
-Planned.
+Complete.
+
+## Phase 7F: Watch Items Tracking Overview API
+
+Goal:
+Add a lightweight list-level tracking overview endpoint that returns dashboard-ready tracking cards for multiple watch items without requiring repeated per-item summary calls.
+
+Complete.
 
 ## Phase 6I: Yardi Draft Profile From Sample Data
 

@@ -6,6 +6,7 @@ import type {
   PropertySourceRecord,
   Repository,
   ScrapeRunRecord,
+  WatchStatus,
   WatchListItemRecord,
 } from "../types.js";
 
@@ -82,6 +83,62 @@ export type WatchItemRecentResult = {
   createdAt: string;
 };
 
+export type WatchItemsTrackingOverviewOptions = {
+  status?: WatchStatus;
+  needsReview?: boolean;
+  hasUnreadAlerts?: boolean;
+  withinBudget?: boolean;
+  limit: number;
+  offset: number;
+};
+
+export type WatchItemsTrackingOverviewResponse = {
+  generatedAt: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: WatchItemTrackingOverviewCard[];
+};
+
+export type WatchItemTrackingOverviewCard = {
+  watchItemId: string;
+  propertyId: string;
+  watchItemStatus: string;
+  propertyName?: string;
+  targetBudgetMax?: number | null;
+  latestPrice: WatchItemLatestPrice | null;
+  budgetStatus: WatchItemBudgetStatus;
+  alertSummary: {
+    unreadCount: number;
+    latestAlert?: WatchItemAlertSummary | null;
+  };
+  trackingStatus: WatchItemTrackingSummary["trackingStatus"];
+  sourceHealthStatus: WatchItemSourceHealthStatus;
+};
+
+export type WatchItemBudgetStatus = {
+  targetBudgetMax?: number | null;
+  effectiveRent?: number | null;
+  withinBudget: boolean | null;
+  amountBelowBudget?: number | null;
+  amountAboveBudget?: number | null;
+};
+
+export type WatchItemSourceHealthOverallStatus =
+  | "OK"
+  | "NEEDS_REVIEW"
+  | "NO_USABLE_SOURCE"
+  | "FAILING"
+  | "UNKNOWN";
+
+export type WatchItemSourceHealthStatus = {
+  usableSources: number;
+  unhealthySources: number;
+  needsReviewSources: number;
+  hasUsableSource: boolean;
+  overallStatus: WatchItemSourceHealthOverallStatus;
+};
+
 type TrackingEvent = WatchItemRecentResult & {
   id: string;
   propertyId?: string | null;
@@ -147,6 +204,53 @@ export class WatchItemTrackingSummaryService {
     };
   }
 
+  async getOverview(
+    options: WatchItemsTrackingOverviewOptions,
+  ): Promise<WatchItemsTrackingOverviewResponse> {
+    const watchItems = (await this.repository.listWatchListItems()).filter(
+      (item) =>
+        options.status === undefined ? true : item.status === options.status,
+    );
+    const cards = (
+      await Promise.all(
+        watchItems.map(async (item) => {
+          const summary = await this.getSummary(item.id);
+          return summary ? overviewCard(summary) : null;
+        }),
+      )
+    ).filter((card): card is WatchItemTrackingOverviewCard => card !== null);
+    const filtered = cards
+      .filter((card) =>
+        options.needsReview === undefined
+          ? true
+          : (card.trackingStatus.needsReview ||
+              card.sourceHealthStatus.overallStatus === "NEEDS_REVIEW") ===
+            options.needsReview,
+      )
+      .filter((card) =>
+        options.hasUnreadAlerts === undefined
+          ? true
+          : card.alertSummary.unreadCount > 0 === options.hasUnreadAlerts,
+      )
+      .filter((card) =>
+        options.withinBudget === undefined
+          ? true
+          : card.budgetStatus.withinBudget === options.withinBudget,
+      );
+    const items = filtered.slice(
+      options.offset,
+      options.offset + options.limit,
+    );
+
+    return {
+      generatedAt: new Date().toISOString(),
+      total: filtered.length,
+      limit: options.limit,
+      offset: options.offset,
+      items,
+    };
+  }
+
   private async relevantAlerts(
     watchItem: WatchListItemRecord,
     property: PropertyRecord,
@@ -170,6 +274,108 @@ export class WatchItemTrackingSummaryService {
     const latest = directAlerts.sort(compareAlertsDesc)[0] ?? all[0] ?? null;
     return { all, latest };
   }
+}
+
+function overviewCard(
+  summary: WatchItemTrackingSummary,
+): WatchItemTrackingOverviewCard {
+  return {
+    watchItemId: summary.watchItemId,
+    propertyId: summary.propertyId,
+    watchItemStatus: summary.watchItemStatus,
+    propertyName: summary.propertyName,
+    targetBudgetMax: summary.targetBudgetMax,
+    latestPrice: summary.latestPrice,
+    budgetStatus: budgetStatus(summary),
+    alertSummary: summary.alertSummary,
+    trackingStatus: summary.trackingStatus,
+    sourceHealthStatus: sourceHealthStatus(
+      summary.sourceHealth,
+      summary.trackingStatus,
+    ),
+  };
+}
+
+function budgetStatus(
+  summary: WatchItemTrackingSummary,
+): WatchItemBudgetStatus {
+  const targetBudgetMax = summary.targetBudgetMax ?? null;
+  const effectiveRent = summary.latestPrice?.effectiveRent ?? null;
+  if (targetBudgetMax === null || effectiveRent === null) {
+    return {
+      targetBudgetMax,
+      effectiveRent,
+      withinBudget: null,
+      amountBelowBudget: null,
+      amountAboveBudget: null,
+    };
+  }
+
+  if (effectiveRent <= targetBudgetMax) {
+    return {
+      targetBudgetMax,
+      effectiveRent,
+      withinBudget: true,
+      amountBelowBudget: targetBudgetMax - effectiveRent,
+      amountAboveBudget: null,
+    };
+  }
+
+  return {
+    targetBudgetMax,
+    effectiveRent,
+    withinBudget: false,
+    amountBelowBudget: null,
+    amountAboveBudget: effectiveRent - targetBudgetMax,
+  };
+}
+
+function sourceHealthStatus(
+  sources: WatchItemSourceHealth[],
+  status: WatchItemTrackingSummary["trackingStatus"],
+): WatchItemSourceHealthStatus {
+  const usableSources = sources.filter((source) => source.isUsable);
+  const unhealthySources = usableSources.filter(
+    (source) => source.lastRunStatus === "FAILED",
+  );
+  const needsReviewSources = usableSources.filter(
+    (source) => source.needsReview,
+  );
+
+  return {
+    usableSources: usableSources.length,
+    unhealthySources: unhealthySources.length,
+    needsReviewSources: needsReviewSources.length,
+    hasUsableSource: usableSources.length > 0,
+    overallStatus: sourceHealthOverallStatus({
+      usableSources: usableSources.length,
+      needsReviewSources: needsReviewSources.length,
+      lastSuccessfulCheckAt: status.lastSuccessfulCheckAt ?? null,
+      lastFailedCheckAt: status.lastFailedCheckAt ?? null,
+      lastCheckedAt: status.lastCheckedAt ?? null,
+    }),
+  };
+}
+
+function sourceHealthOverallStatus(input: {
+  usableSources: number;
+  needsReviewSources: number;
+  lastSuccessfulCheckAt: string | null;
+  lastFailedCheckAt: string | null;
+  lastCheckedAt: string | null;
+}): WatchItemSourceHealthOverallStatus {
+  if (input.usableSources === 0) return "NO_USABLE_SOURCE";
+  if (input.needsReviewSources > 0) return "NEEDS_REVIEW";
+  if (
+    input.lastFailedCheckAt &&
+    (!input.lastSuccessfulCheckAt ||
+      input.lastFailedCheckAt > input.lastSuccessfulCheckAt)
+  ) {
+    return "FAILING";
+  }
+  if (input.lastSuccessfulCheckAt) return "OK";
+  if (!input.lastCheckedAt) return "UNKNOWN";
+  return "UNKNOWN";
 }
 
 function formatLatestPrice(

@@ -1523,6 +1523,513 @@ describe("Phase 7E watch item tracking summary API", () => {
   });
 });
 
+describe("Phase 7F watch items tracking overview API", () => {
+  async function createOverviewWatchItem(
+    input: {
+      propertyName?: string;
+      status?:
+        | "WATCHING"
+        | "CONTACTED"
+        | "TOURED"
+        | "APPLIED"
+        | "REJECTED"
+        | "ARCHIVED"
+        | "LEASED";
+      targetBudgetMax?: number | null;
+      sourceType?:
+        | "FLOORPLAN_URL"
+        | "OFFICIAL_SITE"
+        | "OTHER"
+        | "GOOGLE_MAPS"
+        | "ZILLOW";
+      sourceUrl?: string | null;
+    } = {},
+  ) {
+    const property = await repository.createProperty({
+      name: input.propertyName ?? "Tracking Overview Target",
+    });
+    const watchList = await repository.getOrCreateDefaultWatchList();
+    const item = await repository.createWatchListItem({
+      watchListId: watchList.id,
+      propertyId: property.id,
+      targetBedrooms: null,
+      targetBathrooms: null,
+      targetMoveInDate: null,
+      targetBudgetMin: null,
+      targetBudgetMax: input.targetBudgetMax ?? null,
+      priority: "MEDIUM",
+      notes: null,
+      status: input.status ?? "WATCHING",
+    });
+    const source =
+      input.sourceType === undefined && input.sourceUrl === undefined
+        ? null
+        : await repository.createPropertySource({
+            propertyId: property.id,
+            sourceType: input.sourceType ?? "FLOORPLAN_URL",
+            sourceUrl: input.sourceUrl ?? `https://example.test/${property.id}`,
+            sourceExternalId: null,
+            isPrimary: false,
+            metadata: null,
+          });
+    return { property, item, source };
+  }
+
+  async function createOverviewSnapshot(
+    propertyId: string,
+    sourceId: string | null,
+    data: Partial<PriceSnapshotRecord>,
+  ) {
+    return repository.createPriceSnapshot({
+      propertyId,
+      sourceId,
+      floorplanName: data.floorplanName ?? null,
+      unitNumber: data.unitNumber ?? null,
+      bedrooms: data.bedrooms ?? null,
+      bathrooms: data.bathrooms ?? null,
+      sqft: data.sqft ?? null,
+      baseRent: data.baseRent ?? null,
+      effectiveRent: data.effectiveRent ?? data.baseRent ?? null,
+      leaseTermMonths: data.leaseTermMonths ?? null,
+      moveInDate: data.moveInDate ?? null,
+      specialOfferText: data.specialOfferText ?? null,
+      specialOfferValue: data.specialOfferValue ?? null,
+      mandatoryFees: data.mandatoryFees ?? null,
+      availabilityStatus: data.availabilityStatus ?? null,
+      scrapedAt: data.scrapedAt ?? new Date(),
+      rawData: data.rawData ?? null,
+      parseStatus: "PARSED",
+      errorMessage: null,
+    });
+  }
+
+  async function createOverviewPriceCheckResult(input: {
+    propertyId: string;
+    sourceId?: string | null;
+    status: string;
+    itemsFound?: number | null;
+    errorMessage?: string | null;
+    at: Date;
+  }) {
+    vi.useFakeTimers();
+    vi.setSystemTime(input.at);
+    try {
+      const run = await repository.createPriceCheckRun({
+        startedAt: input.at,
+        finishedAt: input.at,
+        status:
+          input.status === "FAILED"
+            ? "FAILED"
+            : input.status === "SUCCEEDED"
+              ? "SUCCEEDED"
+              : "PARTIAL",
+        watchItemsScanned: 1,
+        sourcesSelected: 1,
+        sourcesSucceeded: input.status === "SUCCEEDED" ? 1 : 0,
+        sourcesFailed: input.status === "FAILED" ? 1 : 0,
+        sourcesNeedsReview:
+          input.status !== "SUCCEEDED" && input.status !== "FAILED" ? 1 : 0,
+      });
+      return repository.createPriceCheckRunResult({
+        priceCheckRunId: run.id,
+        propertyId: input.propertyId,
+        sourceId: input.sourceId ?? null,
+        scrapeRunId: null,
+        status: input.status,
+        crawlerTier: "HTTP",
+        itemsFound: input.itemsFound ?? null,
+        errorMessage: input.errorMessage ?? null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  async function createOverviewAlertAt(
+    at: Date,
+    data: Parameters<InMemoryRepository["createAlert"]>[0],
+  ) {
+    vi.useFakeTimers();
+    vi.setSystemTime(at);
+    try {
+      return await repository.createAlert(data);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("returns paginated watch item tracking cards", async () => {
+    const first = await createOverviewWatchItem({
+      propertyName: "Overview One",
+      targetBudgetMax: 2600,
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewSnapshot(first.property.id, first.source?.id ?? null, {
+      floorplanName: "A1",
+      unitNumber: "301",
+      baseRent: 2500,
+      effectiveRent: 2400,
+      availabilityStatus: "AVAILABLE",
+      scrapedAt: new Date("2026-04-01T00:00:00Z"),
+    });
+    await createOverviewWatchItem({
+      propertyName: "Overview Two",
+      sourceType: "OFFICIAL_SITE",
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        total: 2,
+        limit: 50,
+        offset: 0,
+      }),
+    );
+    expect(response.body.generatedAt).toBeTruthy();
+    expect(response.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          watchItemId: first.item.id,
+          propertyId: first.property.id,
+          propertyName: "Overview One",
+          latestPrice: expect.objectContaining({
+            floorplanName: "A1",
+            effectiveRent: 2400,
+          }),
+          budgetStatus: expect.objectContaining({
+            withinBudget: true,
+            amountBelowBudget: 200,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("supports status filtering", async () => {
+    const watching = await createOverviewWatchItem({
+      propertyName: "Watching Overview",
+      status: "WATCHING",
+    });
+    await createOverviewWatchItem({
+      propertyName: "Archived Overview",
+      status: "ARCHIVED",
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary?status=WATCHING")
+      .expect(200);
+
+    expect(response.body.total).toBe(1);
+    expect(response.body.items[0].watchItemId).toBe(watching.item.id);
+  });
+
+  it("supports limit and offset pagination", async () => {
+    await createOverviewWatchItem({ propertyName: "One" });
+    const second = await createOverviewWatchItem({ propertyName: "Two" });
+    await createOverviewWatchItem({ propertyName: "Three" });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary?limit=1&offset=1")
+      .expect(200);
+
+    expect(response.body.total).toBe(3);
+    expect(response.body.limit).toBe(1);
+    expect(response.body.offset).toBe(1);
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0].watchItemId).toBe(second.item.id);
+  });
+
+  it("returns 400 for invalid limit or offset", async () => {
+    await request(app)
+      .get("/api/watch-items/tracking-summary?limit=0")
+      .expect(400);
+    await request(app)
+      .get("/api/watch-items/tracking-summary?offset=-1")
+      .expect(400);
+  });
+
+  it("caps an oversized limit", async () => {
+    await createOverviewWatchItem();
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary?limit=500")
+      .expect(200);
+
+    expect(response.body.limit).toBe(100);
+  });
+
+  it("reports over-budget and null budget statuses", async () => {
+    const over = await createOverviewWatchItem({
+      propertyName: "Over Budget",
+      targetBudgetMax: 2200,
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewSnapshot(over.property.id, over.source?.id ?? null, {
+      effectiveRent: 2400,
+    });
+    const noBudget = await createOverviewWatchItem({
+      propertyName: "No Budget",
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewSnapshot(
+      noBudget.property.id,
+      noBudget.source?.id ?? null,
+      { effectiveRent: 2100 },
+    );
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+    const overCard = response.body.items.find(
+      (item: { watchItemId: string }) => item.watchItemId === over.item.id,
+    );
+    const noBudgetCard = response.body.items.find(
+      (item: { watchItemId: string }) => item.watchItemId === noBudget.item.id,
+    );
+
+    expect(overCard.budgetStatus).toEqual(
+      expect.objectContaining({
+        withinBudget: false,
+        amountAboveBudget: 200,
+      }),
+    );
+    expect(noBudgetCard.budgetStatus).toEqual(
+      expect.objectContaining({
+        targetBudgetMax: null,
+        effectiveRent: 2100,
+        withinBudget: null,
+      }),
+    );
+  });
+
+  it("reports null budget status when there is no latest price", async () => {
+    const item = await createOverviewWatchItem({
+      targetBudgetMax: 2600,
+      sourceType: "FLOORPLAN_URL",
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+
+    expect(response.body.items[0]).toEqual(
+      expect.objectContaining({
+        watchItemId: item.item.id,
+        latestPrice: null,
+        budgetStatus: expect.objectContaining({
+          effectiveRent: null,
+          withinBudget: null,
+        }),
+      }),
+    );
+  });
+
+  it("reports source health overall statuses", async () => {
+    const noUsable = await createOverviewWatchItem({
+      propertyName: "No Usable",
+    });
+    const needsReview = await createOverviewWatchItem({
+      propertyName: "Needs Review",
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewPriceCheckResult({
+      propertyId: needsReview.property.id,
+      sourceId: needsReview.source?.id,
+      status: "PARTIAL",
+      itemsFound: 0,
+      at: new Date("2026-04-01T00:00:00Z"),
+    });
+    const failing = await createOverviewWatchItem({
+      propertyName: "Failing",
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewPriceCheckResult({
+      propertyId: failing.property.id,
+      sourceId: failing.source?.id,
+      status: "SUCCEEDED",
+      itemsFound: 1,
+      at: new Date("2026-04-01T00:00:00Z"),
+    });
+    await createOverviewPriceCheckResult({
+      propertyId: failing.property.id,
+      sourceId: failing.source?.id,
+      status: "FAILED",
+      itemsFound: 0,
+      at: new Date("2026-04-02T00:00:00Z"),
+    });
+    const ok = await createOverviewWatchItem({
+      propertyName: "OK",
+      sourceType: "OFFICIAL_SITE",
+    });
+    await createOverviewPriceCheckResult({
+      propertyId: ok.property.id,
+      sourceId: ok.source?.id,
+      status: "SUCCEEDED",
+      itemsFound: 1,
+      at: new Date("2026-04-03T00:00:00Z"),
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+    const statusById = Object.fromEntries(
+      response.body.items.map(
+        (item: {
+          watchItemId: string;
+          sourceHealthStatus: { overallStatus: string };
+        }) => [item.watchItemId, item.sourceHealthStatus.overallStatus],
+      ),
+    );
+
+    expect(statusById[noUsable.item.id]).toBe("NO_USABLE_SOURCE");
+    expect(statusById[needsReview.item.id]).toBe("NEEDS_REVIEW");
+    expect(statusById[failing.item.id]).toBe("FAILING");
+    expect(statusById[ok.item.id]).toBe("OK");
+  });
+
+  it("reports unknown source health when a usable source has no run history", async () => {
+    const unknown = await createOverviewWatchItem({
+      propertyName: "Unknown",
+      sourceType: "FLOORPLAN_URL",
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+    const card = response.body.items.find(
+      (item: { watchItemId: string }) => item.watchItemId === unknown.item.id,
+    );
+
+    expect(card.sourceHealthStatus).toEqual(
+      expect.objectContaining({
+        usableSources: 1,
+        hasUsableSource: true,
+        overallStatus: "UNKNOWN",
+      }),
+    );
+  });
+
+  it("includes unread alert count and latest alert", async () => {
+    const { property, item } = await createOverviewWatchItem();
+    await createOverviewAlertAt(new Date("2026-04-01T00:00:00Z"), {
+      propertyId: property.id,
+      watchListItemId: item.id,
+      alertType: "PRICE_DROPPED",
+      title: "Price dropped",
+      message: "Rent changed.",
+      severity: "INFO",
+      isRead: false,
+    });
+    await createOverviewAlertAt(new Date("2026-04-02T00:00:00Z"), {
+      propertyId: property.id,
+      watchListItemId: null,
+      alertType: "NEEDS_REVIEW",
+      title: "Needs review",
+      message: "Source needs review.",
+      severity: "WARNING",
+      isRead: false,
+    });
+
+    const response = await request(app)
+      .get("/api/watch-items/tracking-summary")
+      .expect(200);
+
+    expect(response.body.items[0].alertSummary).toEqual(
+      expect.objectContaining({
+        unreadCount: 2,
+        latestAlert: expect.objectContaining({
+          alertType: "PRICE_DROPPED",
+          title: "Price dropped",
+        }),
+      }),
+    );
+  });
+
+  it("supports optional derived filters", async () => {
+    const inBudget = await createOverviewWatchItem({
+      targetBudgetMax: 2600,
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewSnapshot(
+      inBudget.property.id,
+      inBudget.source?.id ?? null,
+      { effectiveRent: 2400 },
+    );
+    await createOverviewWatchItem({
+      targetBudgetMax: 2200,
+      sourceType: "FLOORPLAN_URL",
+    });
+    const review = await createOverviewWatchItem({
+      sourceType: "FLOORPLAN_URL",
+    });
+    await createOverviewPriceCheckResult({
+      propertyId: review.property.id,
+      sourceId: review.source?.id,
+      status: "PARTIAL",
+      itemsFound: 0,
+      at: new Date("2026-04-01T00:00:00Z"),
+    });
+    const alerted = await createOverviewWatchItem();
+    await createOverviewAlertAt(new Date("2026-04-01T00:00:00Z"), {
+      propertyId: alerted.property.id,
+      watchListItemId: alerted.item.id,
+      alertType: "NEEDS_REVIEW",
+      title: "Needs review",
+      message: "Source needs review.",
+      severity: "WARNING",
+      isRead: false,
+    });
+
+    const withinBudget = await request(app)
+      .get("/api/watch-items/tracking-summary?withinBudget=true")
+      .expect(200);
+    const needsReview = await request(app)
+      .get("/api/watch-items/tracking-summary?needsReview=true")
+      .expect(200);
+    const hasUnreadAlerts = await request(app)
+      .get("/api/watch-items/tracking-summary?hasUnreadAlerts=true")
+      .expect(200);
+
+    expect(withinBudget.body.total).toBe(1);
+    expect(withinBudget.body.items[0].watchItemId).toBe(inBudget.item.id);
+    expect(
+      needsReview.body.items.map(
+        (item: { watchItemId: string }) => item.watchItemId,
+      ),
+    ).toContain(review.item.id);
+    expect(hasUnreadAlerts.body.total).toBe(1);
+    expect(hasUnreadAlerts.body.items[0].watchItemId).toBe(alerted.item.id);
+  });
+
+  it("is read-only and does not create tracking records", async () => {
+    const { property } = await createOverviewWatchItem({
+      sourceType: "FLOORPLAN_URL",
+    });
+    const before = {
+      alerts: (await repository.listAlerts()).length,
+      snapshots: (await repository.listPriceSnapshots(property.id)).length,
+      scrapeTasks: (await repository.listScrapeTasks()).length,
+      scrapeRuns: (await repository.listScrapeRuns()).length,
+      priceCheckRuns: (await repository.listPriceCheckRuns()).length,
+      priceCheckResults: (await repository.listPriceCheckRunResults()).length,
+    };
+
+    await request(app).get("/api/watch-items/tracking-summary").expect(200);
+
+    expect({
+      alerts: (await repository.listAlerts()).length,
+      snapshots: (await repository.listPriceSnapshots(property.id)).length,
+      scrapeTasks: (await repository.listScrapeTasks()).length,
+      scrapeRuns: (await repository.listScrapeRuns()).length,
+      priceCheckRuns: (await repository.listPriceCheckRuns()).length,
+      priceCheckResults: (await repository.listPriceCheckRunResults()).length,
+    }).toEqual(before);
+  });
+});
+
 describe("Phase 7D local price check runner", () => {
   function summary(
     overrides: Partial<Awaited<ReturnType<ScheduledPriceCheckExecutor>>> = {},

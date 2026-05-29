@@ -16,7 +16,7 @@ Completed phases:
 
 Current preparation:
 
-- Phase 7E Watch Item Tracking Summary API: per-watch-item read-only tracking summaries for latest price, alerts, source health, recent checks, and needs-review status.
+- Phase 7F Watch Items Tracking Overview API: list-level read-only tracking cards for future dashboard use, building on the Phase 7E per-watch-item summary endpoint.
 
 ## Not Implemented Yet
 
@@ -154,7 +154,7 @@ Browser fallback uses conservative timing settings:
 
 - Properties: create, list, get, update, delete properties.
 - Property sources: attach external source URLs and metadata to properties.
-- Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes. Use `GET /api/watch-items/:id/tracking-summary` for a read-only per-item tracking summary.
+- Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes. Use `GET /api/watch-items/:id/tracking-summary` for a read-only per-item tracking summary, and `GET /api/watch-items/tracking-summary` for paginated read-only overview cards.
 - Price check runner: manually trigger run-all price checks with `POST /api/price-check/run-all`, including dry-run, cooldown, force, and max-source controls. Inspect run history with `GET /api/price-check/runs`, and review watch list health with `GET /api/price-check/health`.
 - Scrape tasks/runs: create scrape tasks, run them, and inspect scrape run records.
 - Price snapshots/history/latest price: store historical snapshots and read latest or chronological price data.
@@ -184,10 +184,17 @@ GET /api/watch-items/:id/tracking-summary
 
 The response includes the watch item and property basics, latest price snapshot or `null`, unread alert count, latest relevant alert, last check timestamps, source health, and a bounded recent results list. Alerts include direct watch-item alerts plus property-level alerts for that watch item's property; the latest direct watch-item alert is preferred, with property-level alerts used as fallback. This endpoint is read-only and does not create alerts, snapshots, scrape runs, or price-check results.
 
+Read dashboard-ready tracking cards for multiple watch items:
+
+```http
+GET /api/watch-items/tracking-summary?status=WATCHING&limit=50&offset=0
+```
+
+The overview response includes `generatedAt`, `total`, `limit`, `offset`, and `items`. Each item includes latest price, budget status, unread alert count and latest alert, tracking status, and aggregate source health status. Supported filters are `status`, `needsReview`, `hasUnreadAlerts`, `withinBudget`, `limit`, and `offset`; `limit` defaults to `50` and is capped at `100`. This endpoint is read-only and does not create alerts, snapshots, scrape runs, or price-check runs.
+
 ## Future Phases
 
 - Phase 6: domain-specific parsers for common apartment platforms.
-- Phase 7E: watch item tracking summary API.
 - Phase 7: Google Places and map discovery.
 - Phase 8: reviews, social, and forum data.
 - Phase 9: AI, pgvector, semantic search, and agent research.

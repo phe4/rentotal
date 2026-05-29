@@ -3,6 +3,8 @@ import {
   intakeInputTypes,
   type IntakeInputType,
   type Repository,
+  type WatchStatus,
+  watchStatuses,
 } from "../types.js";
 import { WatchItemTrackingSummaryService } from "../services/watchItemTrackingSummaryService.js";
 import { HttpError, sendError } from "../validation/http.js";
@@ -144,6 +146,26 @@ export function watchItemsRouter(repository: Repository): Router {
     res.json(await repository.listWatchListItems());
   });
 
+  router.get("/watch-items/tracking-summary", async (req, res) => {
+    try {
+      res.json(
+        await trackingSummaryService.getOverview({
+          status: queryWatchStatus(req.query.status),
+          needsReview: queryBoolean(req.query.needsReview, "needsReview"),
+          hasUnreadAlerts: queryBoolean(
+            req.query.hasUnreadAlerts,
+            "hasUnreadAlerts",
+          ),
+          withinBudget: queryBoolean(req.query.withinBudget, "withinBudget"),
+          limit: queryPositiveInteger(req.query.limit, "limit", 50, 100),
+          offset: queryNonNegativeInteger(req.query.offset, "offset", 0),
+        }),
+      );
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   router.get("/watch-items/:id/tracking-summary", async (req, res) => {
     try {
       const summary = await trackingSummaryService.getSummary(req.params.id);
@@ -181,6 +203,57 @@ export function watchItemsRouter(repository: Repository): Router {
   });
 
   return router;
+}
+
+function queryWatchStatus(value: unknown): WatchStatus | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !watchStatuses.includes(value as WatchStatus)
+  ) {
+    throw new HttpError(
+      400,
+      `status must be one of: ${watchStatuses.join(", ")}.`,
+    );
+  }
+  return value as WatchStatus;
+}
+
+function queryBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new HttpError(400, `${field} must be true or false.`);
+}
+
+function queryPositiveInteger(
+  value: unknown,
+  field: string,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = queryInteger(value, field, fallback);
+  if (parsed <= 0) throw new HttpError(400, `${field} must be positive.`);
+  if (parsed > max) return max;
+  return parsed;
+}
+
+function queryNonNegativeInteger(
+  value: unknown,
+  field: string,
+  fallback: number,
+): number {
+  const parsed = queryInteger(value, field, fallback);
+  if (parsed < 0) throw new HttpError(400, `${field} must be >= 0.`);
+  return parsed;
+}
+
+function queryInteger(value: unknown, field: string, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new HttpError(400, `${field} must be an integer.`);
+  }
+  return Number.parseInt(value, 10);
 }
 
 function sourceUrlFromUrlLikeInput(
