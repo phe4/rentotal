@@ -14,6 +14,10 @@ Completed phases:
 - Phase 4 Playwright fallback: browser fallback for dynamic pages after HTTP parsing finds no rent.
 - Phase 5 direct JSON endpoint discovery: candidate JSON endpoint capture during browser fallback, source metadata persistence, direct JSON collector, and generic JSON rent parser.
 
+Current preparation:
+
+- Phase 7E Watch Item Tracking Summary API: per-watch-item read-only tracking summaries for latest price, alerts, source health, recent checks, and needs-review status.
+
 ## Not Implemented Yet
 
 These features are intentionally out of scope for the current implementation:
@@ -150,7 +154,7 @@ Browser fallback uses conservative timing settings:
 
 - Properties: create, list, get, update, delete properties.
 - Property sources: attach external source URLs and metadata to properties.
-- Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes.
+- Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes. Use `GET /api/watch-items/:id/tracking-summary` for a read-only per-item tracking summary.
 - Price check runner: manually trigger run-all price checks with `POST /api/price-check/run-all`, including dry-run, cooldown, force, and max-source controls. Inspect run history with `GET /api/price-check/runs`, and review watch list health with `GET /api/price-check/health`.
 - Scrape tasks/runs: create scrape tasks, run them, and inspect scrape run records.
 - Price snapshots/history/latest price: store historical snapshots and read latest or chronological price data.
@@ -170,9 +174,20 @@ The scraper pipeline is intentionally conservative:
 
 The generic parsers should not create fake price data when rent is not present.
 
+## Watch Item Tracking Summary
+
+Read a single watch item's tracking summary:
+
+```http
+GET /api/watch-items/:id/tracking-summary
+```
+
+The response includes the watch item and property basics, latest price snapshot or `null`, unread alert count, latest relevant alert, last check timestamps, source health, and a bounded recent results list. Alerts include direct watch-item alerts plus property-level alerts for that watch item's property; the latest direct watch-item alert is preferred, with property-level alerts used as fallback. This endpoint is read-only and does not create alerts, snapshots, scrape runs, or price-check results.
+
 ## Future Phases
 
 - Phase 6: domain-specific parsers for common apartment platforms.
+- Phase 7E: watch item tracking summary API.
 - Phase 7: Google Places and map discovery.
 - Phase 8: reviews, social, and forum data.
 - Phase 9: AI, pgvector, semantic search, and agent research.

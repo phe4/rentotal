@@ -4,6 +4,7 @@ import {
   type IntakeInputType,
   type Repository,
 } from "../types.js";
+import { WatchItemTrackingSummaryService } from "../services/watchItemTrackingSummaryService.js";
 import { HttpError, sendError } from "../validation/http.js";
 import {
   isUrlInputType,
@@ -21,6 +22,9 @@ import {
 
 export function watchItemsRouter(repository: Repository): Router {
   const router = Router();
+  const trackingSummaryService = new WatchItemTrackingSummaryService(
+    repository,
+  );
 
   router.post("/watch-items", async (req, res) => {
     try {
@@ -138,6 +142,16 @@ export function watchItemsRouter(repository: Repository): Router {
 
   router.get("/watch-items", async (_req, res) => {
     res.json(await repository.listWatchListItems());
+  });
+
+  router.get("/watch-items/:id/tracking-summary", async (req, res) => {
+    try {
+      const summary = await trackingSummaryService.getSummary(req.params.id);
+      if (!summary) throw new HttpError(404, "Watch item not found.");
+      res.json(summary);
+    } catch (error) {
+      sendError(res, error);
+    }
   });
 
   router.get("/watch-items/:id", async (req, res) => {

@@ -226,13 +226,13 @@ export class InMemoryRepository implements Repository {
   async listPriceSnapshots(propertyId: string): Promise<PriceSnapshotRecord[]> {
     return [...this.priceSnapshots.values()]
       .filter((snapshot) => snapshot.propertyId === propertyId)
-      .sort((a, b) => snapshotTime(b) - snapshotTime(a));
+      .sort(compareSnapshotsDesc);
   }
 
   async listPriceHistory(propertyId: string): Promise<PriceSnapshotRecord[]> {
     return [...this.priceSnapshots.values()]
       .filter((snapshot) => snapshot.propertyId === propertyId)
-      .sort((a, b) => snapshotTime(a) - snapshotTime(b));
+      .sort(compareSnapshotsAsc);
   }
 
   async getLatestPriceSnapshot(
@@ -296,7 +296,9 @@ export class InMemoryRepository implements Repository {
 
   async listScrapeRuns(): Promise<ScrapeRunRecord[]> {
     return [...this.scrapeRuns.values()].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+      (a, b) =>
+        b.createdAt.getTime() - a.createdAt.getTime() ||
+        b.id.localeCompare(a.id),
     );
   }
 
@@ -379,12 +381,17 @@ export class InMemoryRepository implements Repository {
           ? true
           : result.priceCheckRunId === priceCheckRunId,
       )
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .sort(
+        (a, b) =>
+          b.createdAt.getTime() - a.createdAt.getTime() ||
+          b.id.localeCompare(a.id),
+      );
   }
 
   async listAlerts(filters?: {
     isRead?: boolean;
     propertyId?: string;
+    watchListItemId?: string;
     alertType?: AlertRecord["alertType"];
   }): Promise<AlertRecord[]> {
     return [...this.alerts.values()]
@@ -397,11 +404,20 @@ export class InMemoryRepository implements Repository {
           : alert.propertyId === filters.propertyId,
       )
       .filter((alert) =>
+        filters?.watchListItemId === undefined
+          ? true
+          : alert.watchListItemId === filters.watchListItemId,
+      )
+      .filter((alert) =>
         filters?.alertType === undefined
           ? true
           : alert.alertType === filters.alertType,
       )
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      .sort(
+        (a, b) =>
+          b.createdAt.getTime() - a.createdAt.getTime() ||
+          b.id.localeCompare(a.id),
+      );
   }
 
   async createAlert(
@@ -436,4 +452,26 @@ export class InMemoryRepository implements Repository {
 
 function snapshotTime(snapshot: PriceSnapshotRecord): number {
   return (snapshot.scrapedAt ?? snapshot.createdAt).getTime();
+}
+
+function compareSnapshotsDesc(
+  a: PriceSnapshotRecord,
+  b: PriceSnapshotRecord,
+): number {
+  return (
+    snapshotTime(b) - snapshotTime(a) ||
+    b.createdAt.getTime() - a.createdAt.getTime() ||
+    b.id.localeCompare(a.id)
+  );
+}
+
+function compareSnapshotsAsc(
+  a: PriceSnapshotRecord,
+  b: PriceSnapshotRecord,
+): number {
+  return (
+    snapshotTime(a) - snapshotTime(b) ||
+    a.createdAt.getTime() - b.createdAt.getTime() ||
+    a.id.localeCompare(b.id)
+  );
 }

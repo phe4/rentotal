@@ -243,14 +243,14 @@ export class PrismaRepository implements Repository {
     const snapshots = await this.prisma.priceSnapshot.findMany({
       where: { propertyId },
     });
-    return snapshots.sort((a, b) => snapshotTime(b) - snapshotTime(a));
+    return snapshots.sort(compareSnapshotsDesc);
   }
 
   async listPriceHistory(propertyId: string): Promise<PriceSnapshotRecord[]> {
     const snapshots = await this.prisma.priceSnapshot.findMany({
       where: { propertyId },
     });
-    return snapshots.sort((a, b) => snapshotTime(a) - snapshotTime(b));
+    return snapshots.sort(compareSnapshotsAsc);
   }
 
   async getLatestPriceSnapshot(
@@ -340,7 +340,9 @@ export class PrismaRepository implements Repository {
   }
 
   async listScrapeRuns(): Promise<ScrapeRunRecord[]> {
-    return this.prisma.scrapeRun.findMany({ orderBy: { createdAt: "desc" } });
+    return this.prisma.scrapeRun.findMany({
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
   }
 
   async getScrapeRun(id: string): Promise<ScrapeRunRecord | null> {
@@ -448,22 +450,24 @@ export class PrismaRepository implements Repository {
   ): Promise<PriceCheckRunResultRecord[]> {
     return this.prisma.priceCheckRunResult.findMany({
       where: { priceCheckRunId },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
   }
 
   async listAlerts(filters?: {
     isRead?: boolean;
     propertyId?: string;
+    watchListItemId?: string;
     alertType?: AlertRecord["alertType"];
   }): Promise<AlertRecord[]> {
     return this.prisma.alert.findMany({
       where: {
         isRead: filters?.isRead,
         propertyId: filters?.propertyId,
+        watchListItemId: filters?.watchListItemId,
         alertType: filters?.alertType,
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
   }
 
@@ -499,4 +503,26 @@ export class PrismaRepository implements Repository {
 
 function snapshotTime(snapshot: PriceSnapshotRecord): number {
   return (snapshot.scrapedAt ?? snapshot.createdAt).getTime();
+}
+
+function compareSnapshotsDesc(
+  a: PriceSnapshotRecord,
+  b: PriceSnapshotRecord,
+): number {
+  return (
+    snapshotTime(b) - snapshotTime(a) ||
+    b.createdAt.getTime() - a.createdAt.getTime() ||
+    b.id.localeCompare(a.id)
+  );
+}
+
+function compareSnapshotsAsc(
+  a: PriceSnapshotRecord,
+  b: PriceSnapshotRecord,
+): number {
+  return (
+    snapshotTime(a) - snapshotTime(b) ||
+    a.createdAt.getTime() - b.createdAt.getTime() ||
+    a.id.localeCompare(b.id)
+  );
 }

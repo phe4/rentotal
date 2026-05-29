@@ -358,6 +358,7 @@ export interface Repository {
   listAlerts(filters?: {
     isRead?: boolean;
     propertyId?: string;
+    watchListItemId?: string;
     alertType?: AlertType;
   }): Promise<AlertRecord[]>;
   createAlert(

@@ -245,6 +245,13 @@ Add a local one-shot CLI runner for price checks that can be invoked by Windows 
 
 Complete.
 
+## Phase 7E: Watch Item Tracking Summary API
+
+Goal:
+Add a per-watch-item tracking summary endpoint that aggregates latest price, source health, recent price-check status, and alerts for a single watch item.
+
+Planned.
+
 ## Phase 6I: Yardi Draft Profile From Sample Data
 
 Goal:
