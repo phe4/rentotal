@@ -1,5 +1,8 @@
 import type {
   AlertRecord,
+  PriceCheckRunRecord,
+  PriceCheckRunResultRecord,
+  PriceCheckRunStatus,
   PriceSnapshotRecord,
   PropertyRecord,
   PropertySourceRecord,
@@ -34,6 +37,8 @@ export class InMemoryRepository implements Repository {
   private scrapeTasks = new Map<string, ScrapeTaskRecord>();
   private scrapeRuns = new Map<string, ScrapeRunRecord>();
   private rawPages = new Map<string, RawPageRecord>();
+  private priceCheckRuns = new Map<string, PriceCheckRunRecord>();
+  private priceCheckRunResults = new Map<string, PriceCheckRunResultRecord>();
   private alerts = new Map<string, AlertRecord>();
 
   async createProperty(
@@ -316,6 +321,65 @@ export class InMemoryRepository implements Repository {
     const record = { ...data, id: id("raw_page"), createdAt: now() };
     this.rawPages.set(record.id, record);
     return record;
+  }
+
+  async createPriceCheckRun(
+    data: Omit<PriceCheckRunRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunRecord> {
+    const record = { ...data, id: id("price_check_run"), createdAt: now() };
+    this.priceCheckRuns.set(record.id, record);
+    return record;
+  }
+
+  async updatePriceCheckRun(
+    id: string,
+    data: Partial<PriceCheckRunRecord>,
+  ): Promise<PriceCheckRunRecord | null> {
+    const existing = this.priceCheckRuns.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...data };
+    this.priceCheckRuns.set(id, updated);
+    return updated;
+  }
+
+  async listPriceCheckRuns(filters?: {
+    limit?: number;
+    status?: PriceCheckRunStatus;
+  }): Promise<PriceCheckRunRecord[]> {
+    return [...this.priceCheckRuns.values()]
+      .filter((run) =>
+        filters?.status === undefined ? true : run.status === filters.status,
+      )
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+      .slice(0, filters?.limit ?? 20);
+  }
+
+  async getPriceCheckRun(id: string): Promise<PriceCheckRunRecord | null> {
+    return this.priceCheckRuns.get(id) ?? null;
+  }
+
+  async createPriceCheckRunResult(
+    data: Omit<PriceCheckRunResultRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunResultRecord> {
+    const record = {
+      ...data,
+      id: id("price_check_result"),
+      createdAt: now(),
+    };
+    this.priceCheckRunResults.set(record.id, record);
+    return record;
+  }
+
+  async listPriceCheckRunResults(
+    priceCheckRunId?: string,
+  ): Promise<PriceCheckRunResultRecord[]> {
+    return [...this.priceCheckRunResults.values()]
+      .filter((result) =>
+        priceCheckRunId === undefined
+          ? true
+          : result.priceCheckRunId === priceCheckRunId,
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async listAlerts(filters?: {

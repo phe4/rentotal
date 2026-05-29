@@ -222,7 +222,28 @@ Complete.
 Goal:
 Add a local/manual price-check runner foundation that can later be called by cron, cloud scheduler, BullMQ, or Airflow.
 
-Current preparation phase. Do not implement cloud scheduling, persistent queues, new scraping behavior, Yardi, AI, maps, frontend, or notification delivery in this phase.
+Complete.
+
+## Phase 7B: Price Check Run History and Watch List Health Summary
+
+Goal:
+Add lightweight run history and health summary APIs for the price check workflow.
+
+Complete.
+
+## Phase 7C: Price Check Cooldown and Run Controls
+
+Goal:
+Add safe run controls for the manual price check workflow, including dry-run, cooldown, force, max source limits, and skipped-source reporting.
+
+Complete.
+
+## Phase 7D: Local Scheduler / Cron-Friendly Price Check Runner
+
+Goal:
+Add a local one-shot CLI runner for price checks that can be invoked by Windows Task Scheduler, cron, GitHub Actions, server-level schedulers, or manual terminal commands.
+
+Complete.
 
 ## Phase 6I: Yardi Draft Profile From Sample Data
 

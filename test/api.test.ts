@@ -26,6 +26,10 @@ import { knockDoorwayParser } from "../src/parsers/knockDoorwayParser.js";
 import { parseJsonWithRegistry } from "../src/parsers/parserRegistry.js";
 import { approvePlatformProfile } from "../src/parsers/platformProfileApproval.js";
 import {
+  parsePriceCheckCliArgs,
+  runPriceCheckCli,
+} from "../src/scripts/priceCheckRunner.js";
+import {
   detectArrayPathCandidates,
   generatePlatformProfileDraft,
   suggestMapping,
@@ -56,6 +60,7 @@ import {
 } from "../src/parsers/platformProfileValidationCases.js";
 import { validateProfileCase } from "../src/parsers/platformProfileValidation.js";
 import { calculateEffectiveRent } from "../src/services/effectiveRent.js";
+import type { ScheduledPriceCheckExecutor } from "../src/services/scheduledPriceCheckService.js";
 import type { PriceSnapshotRecord } from "../src/types.js";
 
 let repository: InMemoryRepository;
@@ -404,6 +409,744 @@ describe("Phase 2 HTTP scraper API", () => {
 
     expect(detail.body.run.id).toBe(scrape.body.run.id);
     expect(detail.body.priceSnapshots).toHaveLength(1);
+  });
+});
+
+describe("Phase 7A scheduled price check worker", () => {
+  async function createWatchItemWithSource(
+    input: {
+      status?:
+        | "WATCHING"
+        | "CONTACTED"
+        | "TOURED"
+        | "APPLIED"
+        | "REJECTED"
+        | "ARCHIVED"
+        | "LEASED";
+      sourceType?:
+        | "FLOORPLAN_URL"
+        | "OFFICIAL_SITE"
+        | "OTHER"
+        | "GOOGLE_MAPS"
+        | "ZILLOW";
+      sourceUrl?: string | null;
+      propertyId?: string;
+    } = {},
+  ) {
+    const property =
+      input.propertyId !== undefined
+        ? await repository.getProperty(input.propertyId)
+        : await repository.createProperty({
+            name: `Price Check ${Math.random()}`,
+          });
+    if (!property) throw new Error("Property not found for test setup.");
+    const watchList = await repository.getOrCreateDefaultWatchList();
+    const item = await repository.createWatchListItem({
+      watchListId: watchList.id,
+      propertyId: property.id,
+      targetBedrooms: null,
+      targetBathrooms: null,
+      targetMoveInDate: null,
+      targetBudgetMin: null,
+      targetBudgetMax: null,
+      priority: "MEDIUM",
+      notes: null,
+      status: input.status ?? "WATCHING",
+    });
+    const source = await repository.createPropertySource({
+      propertyId: property.id,
+      sourceType: input.sourceType ?? "FLOORPLAN_URL",
+      sourceUrl:
+        input.sourceUrl === undefined
+          ? `https://example.test/${property.id}`
+          : input.sourceUrl,
+      sourceExternalId: null,
+      isPrimary: false,
+      metadata: null,
+    });
+    return { property, item, source };
+  }
+
+  function appWithPriceCheckExecutor(executeTask: ScheduledPriceCheckExecutor) {
+    app = createApp(repository, {
+      priceCheck: { executeTask },
+    });
+  }
+
+  function executorWithStatus(
+    statusForSource: (sourceId: string) => "SUCCEEDED" | "FAILED" | "PARTIAL",
+  ) {
+    return vi.fn(async (task, source) => {
+      const status = statusForSource(source.id);
+      const run = await repository.createScrapeRun({
+        taskId: task.id,
+        propertyId: source.propertyId,
+        sourceId: source.id,
+        crawlerTier: "HTTP",
+        status,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        durationMs: 0,
+        httpStatus: status === "FAILED" ? 500 : 200,
+        contentHash: null,
+        itemsFound: status === "SUCCEEDED" ? 1 : 0,
+        rawStorageUrl: null,
+        errorMessage: status === "FAILED" ? "mock failure" : null,
+      });
+      return { run };
+    });
+  }
+
+  it("run-all selects only WATCHING watch list items and skips inactive statuses", async () => {
+    const active = await createWatchItemWithSource({ status: "WATCHING" });
+    for (const status of [
+      "ARCHIVED",
+      "REJECTED",
+      "LEASED",
+      "APPLIED",
+      "CONTACTED",
+      "TOURED",
+    ] as const) {
+      await createWatchItemWithSource({ status });
+    }
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+
+    expect(response.body.watchItemsScanned).toBe(1);
+    expect(response.body.sourcesSelected).toBe(1);
+    expect(executeTask).toHaveBeenCalledTimes(1);
+    expect(executeTask.mock.calls[0]?.[1].id).toBe(active.source?.id);
+  });
+
+  it("source selection includes FLOORPLAN_URL and OFFICIAL_SITE", async () => {
+    const floorplan = await createWatchItemWithSource({
+      sourceType: "FLOORPLAN_URL",
+    });
+    const official = await createWatchItemWithSource({
+      sourceType: "OFFICIAL_SITE",
+    });
+    const other = await createWatchItemWithSource({ sourceType: "OTHER" });
+    await createWatchItemWithSource({ sourceType: "GOOGLE_MAPS" });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    await request(app).post("/api/price-check/run-all").expect(200);
+
+    const selectedIds = executeTask.mock.calls.map((call) => call[1].id);
+    expect(selectedIds).toEqual(
+      expect.arrayContaining([
+        floorplan.source?.id,
+        official.source?.id,
+        other.source?.id,
+      ]),
+    );
+    expect(selectedIds).toHaveLength(3);
+  });
+
+  it("skips sources without URL and non-http URLs", async () => {
+    await createWatchItemWithSource({
+      sourceType: "OFFICIAL_SITE",
+      sourceUrl: null,
+    });
+    await createWatchItemWithSource({
+      sourceType: "FLOORPLAN_URL",
+      sourceUrl: "ftp://example.test/rent",
+    });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(0);
+    expect(response.body.sourcesSkipped).toBe(2);
+    expect(response.body.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: "NO_SOURCE_URL" }),
+        expect.objectContaining({ reason: "INVALID_URL" }),
+      ]),
+    );
+    expect(executeTask).not.toHaveBeenCalled();
+  });
+
+  it("runs duplicate sources only once per run", async () => {
+    const property = await repository.createProperty({ name: "Duplicate Run" });
+    const source = await repository.createPropertySource({
+      propertyId: property.id,
+      sourceType: "FLOORPLAN_URL",
+      sourceUrl: "https://example.test/duplicate",
+      sourceExternalId: null,
+      isPrimary: false,
+      metadata: null,
+    });
+    const watchList = await repository.getOrCreateDefaultWatchList();
+    for (let index = 0; index < 2; index += 1) {
+      await repository.createWatchListItem({
+        watchListId: watchList.id,
+        propertyId: property.id,
+        targetBedrooms: null,
+        targetBathrooms: null,
+        targetMoveInDate: null,
+        targetBudgetMin: null,
+        targetBudgetMax: null,
+        priority: "MEDIUM",
+        notes: null,
+        status: "WATCHING",
+      });
+    }
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(1);
+    expect(response.body.sourcesSkipped).toBe(1);
+    expect(response.body.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: source?.id,
+          reason: "DUPLICATE_SOURCE",
+        }),
+      ]),
+    );
+    expect(executeTask).toHaveBeenCalledTimes(1);
+    expect(executeTask.mock.calls[0]?.[1].id).toBe(source?.id);
+  });
+
+  it("creates PRICE_CHECK tasks and summarizes successes, failures, and needs review", async () => {
+    const success = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/success",
+    });
+    const failed = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/fail",
+    });
+    const partial = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/review",
+    });
+    const executeTask = executorWithStatus((sourceId) => {
+      if (sourceId === failed.source?.id) return "FAILED";
+      if (sourceId === partial.source?.id) return "PARTIAL";
+      return "SUCCEEDED";
+    });
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+    const tasks = await repository.listScrapeTasks();
+
+    expect(response.body.sourcesSelected).toBe(3);
+    expect(response.body.sourcesSucceeded).toBe(1);
+    expect(response.body.sourcesFailed).toBe(1);
+    expect(response.body.sourcesNeedsReview).toBe(1);
+    expect(response.body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: success.source?.id,
+          status: "SUCCEEDED",
+          itemsFound: 1,
+        }),
+        expect.objectContaining({
+          sourceId: failed.source?.id,
+          status: "FAILED",
+          errorMessage: "mock failure",
+        }),
+        expect.objectContaining({
+          sourceId: partial.source?.id,
+          status: "PARTIAL",
+        }),
+      ]),
+    );
+    expect(tasks).toHaveLength(3);
+    expect(tasks.every((task) => task.taskType === "PRICE_CHECK")).toBe(true);
+    expect(executeTask).toHaveBeenCalledTimes(3);
+  });
+
+  it("continues running later sources when one source execution throws", async () => {
+    const first = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/throws",
+    });
+    const second = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/continues",
+    });
+    const executeTask = vi.fn(async (task, source) => {
+      if (source.id === first.source?.id) {
+        throw new Error("mock executor explosion");
+      }
+      const run = await repository.createScrapeRun({
+        taskId: task.id,
+        propertyId: source.propertyId,
+        sourceId: source.id,
+        crawlerTier: "HTTP",
+        status: "SUCCEEDED",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        durationMs: 0,
+        httpStatus: 200,
+        contentHash: null,
+        itemsFound: 1,
+        rawStorageUrl: null,
+        errorMessage: null,
+      });
+      return { run };
+    });
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+
+    expect(executeTask).toHaveBeenCalledTimes(2);
+    expect(response.body.sourcesSelected).toBe(2);
+    expect(response.body.sourcesFailed).toBe(1);
+    expect(response.body.sourcesSucceeded).toBe(1);
+    expect(response.body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: first.source?.id,
+          status: "FAILED",
+          errorMessage: "mock executor explosion",
+        }),
+        expect.objectContaining({
+          sourceId: second.source?.id,
+          status: "SUCCEEDED",
+        }),
+      ]),
+    );
+  });
+
+  it("persists price check run history and result rows", async () => {
+    const source = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/history",
+    });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+    const runs = await repository.listPriceCheckRuns();
+    const results = await repository.listPriceCheckRunResults(response.body.id);
+
+    expect(response.body.status).toBe("SUCCEEDED");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toEqual(
+      expect.objectContaining({
+        id: response.body.id,
+        status: "SUCCEEDED",
+        watchItemsScanned: 1,
+        sourcesSelected: 1,
+        sourcesSucceeded: 1,
+      }),
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual(
+      expect.objectContaining({
+        priceCheckRunId: response.body.id,
+        propertyId: source.property.id,
+        sourceId: source.source?.id,
+        status: "SUCCEEDED",
+        itemsFound: 1,
+      }),
+    );
+  });
+
+  it("lists recent price check runs and returns run details", async () => {
+    await createWatchItemWithSource({
+      sourceUrl: "https://example.test/run-detail",
+    });
+    const executeTask = executorWithStatus(() => "PARTIAL");
+    appWithPriceCheckExecutor(executeTask);
+
+    const run = await request(app).post("/api/price-check/run-all").expect(200);
+    const list = await request(app)
+      .get("/api/price-check/runs?limit=5&status=PARTIAL")
+      .expect(200);
+    const detail = await request(app)
+      .get(`/api/price-check/runs/${run.body.id}`)
+      .expect(200);
+
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0]).toEqual(
+      expect.objectContaining({
+        id: run.body.id,
+        status: "PARTIAL",
+        sourcesNeedsReview: 1,
+      }),
+    );
+    expect(detail.body.run.id).toBe(run.body.id);
+    expect(detail.body.results).toHaveLength(1);
+    expect(detail.body.results[0]).toEqual(
+      expect.objectContaining({ status: "PARTIAL" }),
+    );
+  });
+
+  it("health counts active watch items, usable sources, and items without usable sources", async () => {
+    await createWatchItemWithSource({
+      sourceType: "OFFICIAL_SITE",
+      sourceUrl: "https://example.test/usable",
+    });
+    const propertyWithoutSource = await repository.createProperty({
+      name: "No Usable Source",
+    });
+    const watchList = await repository.getOrCreateDefaultWatchList();
+    await repository.createWatchListItem({
+      watchListId: watchList.id,
+      propertyId: propertyWithoutSource.id,
+      targetBedrooms: null,
+      targetBathrooms: null,
+      targetMoveInDate: null,
+      targetBudgetMin: null,
+      targetBudgetMax: null,
+      priority: "MEDIUM",
+      notes: null,
+      status: "WATCHING",
+    });
+    await createWatchItemWithSource({
+      status: "ARCHIVED",
+      sourceUrl: "https://example.test/inactive",
+    });
+
+    const response = await request(app)
+      .get("/api/price-check/health")
+      .expect(200);
+
+    expect(response.body.activeWatchItems).toBe(2);
+    expect(response.body.watchItemsWithoutSources).toBe(1);
+    expect(response.body.usableSources).toBe(1);
+    expect(response.body.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "NO_USABLE_SOURCE",
+          propertyId: propertyWithoutSource.id,
+        }),
+      ]),
+    );
+  });
+
+  it("health includes recent run summaries and flags recent failures and needs review", async () => {
+    const failed = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/health-fail",
+    });
+    const partial = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/health-review",
+    });
+    const success = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/health-success",
+    });
+    const executeTask = executorWithStatus((sourceId) => {
+      if (sourceId === failed.source?.id) return "FAILED";
+      if (sourceId === partial.source?.id) return "PARTIAL";
+      return "SUCCEEDED";
+    });
+    appWithPriceCheckExecutor(executeTask);
+
+    const run = await request(app).post("/api/price-check/run-all").expect(200);
+    const response = await request(app)
+      .get("/api/price-check/health")
+      .expect(200);
+
+    expect(response.body.lastRunAt).toBeTruthy();
+    expect(response.body.sourcesWithRecentSuccess).toBe(1);
+    expect(response.body.sourcesWithRecentFailure).toBe(1);
+    expect(response.body.sourcesNeedingReview).toBe(1);
+    expect(response.body.recentRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: run.body.id,
+          status: "PARTIAL",
+          sourcesSelected: 3,
+          sourcesSucceeded: 1,
+          sourcesFailed: 1,
+          sourcesNeedsReview: 1,
+        }),
+      ]),
+    );
+    expect(response.body.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "SOURCE_RECENT_FAILURE",
+          sourceId: failed.source?.id,
+        }),
+        expect.objectContaining({
+          type: "SOURCE_NEEDS_REVIEW",
+          sourceId: partial.source?.id,
+        }),
+      ]),
+    );
+    expect(success.source?.id).toBeTruthy();
+  });
+
+  it("dryRun returns eligible sources without creating scrape tasks or runs", async () => {
+    const source = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/dry-run",
+    });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .send({ dryRun: true })
+      .expect(200);
+
+    expect(response.body.dryRun).toBe(true);
+    expect(response.body.sourcesSelected).toBe(1);
+    expect(response.body.sourcesSkipped).toBe(1);
+    expect(response.body.results).toEqual([
+      expect.objectContaining({
+        sourceId: source.source?.id,
+        status: "DRY_RUN",
+      }),
+    ]);
+    expect(response.body.skipped).toEqual([
+      expect.objectContaining({
+        sourceId: source.source?.id,
+        reason: "DRY_RUN",
+      }),
+    ]);
+    expect(executeTask).not.toHaveBeenCalled();
+    expect(await repository.listScrapeTasks()).toHaveLength(0);
+    expect(await repository.listScrapeRuns()).toHaveLength(0);
+    expect(await repository.listPriceCheckRuns()).toHaveLength(0);
+    expect(await repository.listPriceCheckRunResults()).toHaveLength(0);
+    expect(
+      await repository.listPriceSnapshots(source.property.id),
+    ).toHaveLength(0);
+    expect(await repository.listAlerts()).toHaveLength(0);
+  });
+
+  it("reports unsupported source types with a stable skip reason", async () => {
+    const source = await createWatchItemWithSource({
+      sourceType: "GOOGLE_MAPS",
+      sourceUrl: "https://example.test/maps",
+    });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(0);
+    expect(response.body.sourcesSkipped).toBe(1);
+    expect(response.body.skipped).toEqual([
+      expect.objectContaining({
+        sourceId: source.source?.id,
+        reason: "UNSUPPORTED_SOURCE_TYPE",
+      }),
+    ]);
+    expect(executeTask).not.toHaveBeenCalled();
+  });
+
+  it("cooldown skips recently checked sources", async () => {
+    const source = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/cooldown",
+    });
+    appWithPriceCheckExecutor(executorWithStatus(() => "SUCCEEDED"));
+    await request(app).post("/api/price-check/run-all").expect(200);
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .send({ cooldownMinutes: 60 })
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(0);
+    expect(response.body.sourcesSkipped).toBe(1);
+    expect(response.body.skipped).toEqual([
+      expect.objectContaining({
+        sourceId: source.source?.id,
+        reason: "COOLDOWN_ACTIVE",
+      }),
+    ]);
+    expect(executeTask).not.toHaveBeenCalled();
+  });
+
+  it("force bypasses cooldown", async () => {
+    const source = await createWatchItemWithSource({
+      sourceUrl: "https://example.test/force",
+    });
+    appWithPriceCheckExecutor(executorWithStatus(() => "SUCCEEDED"));
+    await request(app).post("/api/price-check/run-all").expect(200);
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .send({ cooldownMinutes: 60, force: true })
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(1);
+    expect(response.body.sourcesSkipped).toBe(0);
+    expect(response.body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: source.source?.id,
+          status: "SUCCEEDED",
+        }),
+      ]),
+    );
+    expect(executeTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("maxSources limits executed source count and reports skipped sources", async () => {
+    await createWatchItemWithSource({
+      sourceUrl: "https://example.test/max-1",
+    });
+    await createWatchItemWithSource({
+      sourceUrl: "https://example.test/max-2",
+    });
+    await createWatchItemWithSource({
+      sourceUrl: "https://example.test/max-3",
+    });
+    const executeTask = executorWithStatus(() => "SUCCEEDED");
+    appWithPriceCheckExecutor(executeTask);
+
+    const response = await request(app)
+      .post("/api/price-check/run-all")
+      .send({ maxSources: 2 })
+      .expect(200);
+
+    expect(response.body.sourcesSelected).toBe(2);
+    expect(response.body.sourcesSkipped).toBe(1);
+    expect(response.body.skipped).toEqual([
+      expect.objectContaining({ reason: "MAX_SOURCES_LIMIT" }),
+    ]);
+    expect(executeTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects invalid run-all control values", async () => {
+    await request(app)
+      .post("/api/price-check/run-all")
+      .send({ maxSources: 0 })
+      .expect(400);
+
+    await request(app)
+      .post("/api/price-check/run-all")
+      .send({ cooldownMinutes: -1 })
+      .expect(400);
+  });
+});
+
+describe("Phase 7D local price check runner", () => {
+  function summary(
+    overrides: Partial<Awaited<ReturnType<ScheduledPriceCheckExecutor>>> = {},
+  ) {
+    void overrides;
+    return {
+      startedAt: "2026-05-29T00:00:00.000Z",
+      finishedAt: "2026-05-29T00:00:01.000Z",
+      status: "PARTIAL" as const,
+      watchItemsScanned: 2,
+      sourcesSelected: 2,
+      sourcesSkipped: 1,
+      sourcesSucceeded: 1,
+      sourcesFailed: 1,
+      sourcesNeedsReview: 0,
+      skipped: [
+        {
+          sourceId: "source_1",
+          reason: "COOLDOWN_ACTIVE" as const,
+          message: "Source was checked within the cooldown window.",
+        },
+      ],
+      results: [
+        { sourceId: "source_2", status: "SUCCEEDED", itemsFound: 1 },
+        { sourceId: "source_3", status: "FAILED", errorMessage: "mock fail" },
+      ],
+    };
+  }
+
+  it("parses CLI arguments for dry-run, cooldown, maxSources, and force", () => {
+    expect(parsePriceCheckCliArgs(["--dry-run"]).dryRun).toBe(true);
+    expect(
+      parsePriceCheckCliArgs(["--cooldown-minutes", "120"]).cooldownMinutes,
+    ).toBe(120);
+    expect(parsePriceCheckCliArgs(["--max-sources", "5"]).maxSources).toBe(5);
+    expect(parsePriceCheckCliArgs(["--force"]).force).toBe(true);
+  });
+
+  it("uses safe default CLI options", () => {
+    expect(parsePriceCheckCliArgs([])).toEqual({
+      cooldownMinutes: 360,
+      dryRun: false,
+      force: false,
+    });
+  });
+
+  it("invalid CLI args produce clear failure", async () => {
+    const service = { runAll: vi.fn() };
+
+    const result = await runPriceCheckCli(service, ["--max-sources", "0"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.error).toBe("--max-sources must be a positive integer.");
+    expect(service.runAll).not.toHaveBeenCalled();
+  });
+
+  it("calls scheduled price check service with parsed options", async () => {
+    const service = { runAll: vi.fn(async () => summary()) };
+
+    const result = await runPriceCheckCli(service, [
+      "--dry-run",
+      "--cooldown-minutes",
+      "60",
+      "--max-sources",
+      "10",
+      "--force",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(service.runAll).toHaveBeenCalledWith({
+      cooldownMinutes: 60,
+      dryRun: true,
+      force: true,
+      maxSources: 10,
+    });
+  });
+
+  it("CLI output includes summary counts and skipped reasons", async () => {
+    const service = { runAll: vi.fn(async () => summary()) };
+
+    const result = await runPriceCheckCli(service, []);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toContain("watchItemsScanned: 2");
+    expect(result.output).toContain("sourcesSelected: 2");
+    expect(result.output).toContain("sourcesSkipped: 1");
+    expect(result.output).toContain("sourcesSucceeded: 1");
+    expect(result.output).toContain("sourcesFailed: 1");
+    expect(result.output).toContain("COOLDOWN_ACTIVE sourceId=source_1");
+  });
+
+  it("partial source failures do not force non-zero exit", async () => {
+    const service = { runAll: vi.fn(async () => summary()) };
+
+    const result = await runPriceCheckCli(service, []);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("fatal runner error returns non-zero exit", async () => {
+    const service = {
+      runAll: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    };
+
+    const result = await runPriceCheckCli(service, []);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.error).toBe("database unavailable");
   });
 });
 

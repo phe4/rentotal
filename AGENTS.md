@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 7A - Scheduled Price Check Worker.
+Current phase: Phase 7D - Local Scheduler / Cron-Friendly Price Check Runner.
 
 Build only:
 

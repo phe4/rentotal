@@ -58,6 +58,11 @@ export const crawlerTiers = [
   "MANUAL",
 ] as const;
 export const scrapeRunStatuses = ["SUCCEEDED", "FAILED", "PARTIAL"] as const;
+export const priceCheckRunStatuses = [
+  "SUCCEEDED",
+  "PARTIAL",
+  "FAILED",
+] as const;
 export const alertTypes = [
   "PRICE_DROPPED",
   "PRICE_INCREASED",
@@ -79,6 +84,7 @@ export type ScrapeTaskType = (typeof scrapeTaskTypes)[number];
 export type ScrapeTaskStatus = (typeof scrapeTaskStatuses)[number];
 export type CrawlerTier = (typeof crawlerTiers)[number];
 export type ScrapeRunStatus = (typeof scrapeRunStatuses)[number];
+export type PriceCheckRunStatus = (typeof priceCheckRunStatuses)[number];
 export type AlertType = (typeof alertTypes)[number];
 export type AlertSeverity = (typeof alertSeverities)[number];
 
@@ -221,6 +227,32 @@ export interface RawPageRecord {
   createdAt: Date;
 }
 
+export interface PriceCheckRunRecord {
+  id: string;
+  startedAt: Date;
+  finishedAt: Date | null;
+  status: PriceCheckRunStatus;
+  watchItemsScanned: number;
+  sourcesSelected: number;
+  sourcesSucceeded: number;
+  sourcesFailed: number;
+  sourcesNeedsReview: number;
+  createdAt: Date;
+}
+
+export interface PriceCheckRunResultRecord {
+  id: string;
+  priceCheckRunId: string;
+  propertyId: string | null;
+  sourceId: string | null;
+  scrapeRunId: string | null;
+  status: string;
+  crawlerTier: string | null;
+  itemsFound: number | null;
+  errorMessage: string | null;
+  createdAt: Date;
+}
+
 export interface AlertRecord {
   id: string;
   propertyId: string | null;
@@ -305,6 +337,24 @@ export interface Repository {
   createRawPage(
     data: Omit<RawPageRecord, "id" | "createdAt">,
   ): Promise<RawPageRecord>;
+  createPriceCheckRun(
+    data: Omit<PriceCheckRunRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunRecord>;
+  updatePriceCheckRun(
+    id: string,
+    data: Partial<PriceCheckRunRecord>,
+  ): Promise<PriceCheckRunRecord | null>;
+  listPriceCheckRuns(filters?: {
+    limit?: number;
+    status?: PriceCheckRunStatus;
+  }): Promise<PriceCheckRunRecord[]>;
+  getPriceCheckRun(id: string): Promise<PriceCheckRunRecord | null>;
+  createPriceCheckRunResult(
+    data: Omit<PriceCheckRunResultRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunResultRecord>;
+  listPriceCheckRunResults(
+    priceCheckRunId?: string,
+  ): Promise<PriceCheckRunResultRecord[]>;
   listAlerts(filters?: {
     isRead?: boolean;
     propertyId?: string;

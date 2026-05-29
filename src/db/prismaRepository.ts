@@ -1,6 +1,9 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type {
   AlertRecord,
+  PriceCheckRunRecord,
+  PriceCheckRunResultRecord,
+  PriceCheckRunStatus,
   PriceSnapshotRecord,
   PropertyRecord,
   PropertySourceRecord,
@@ -387,6 +390,65 @@ export class PrismaRepository implements Repository {
         rawJson: data.rawJson === null ? undefined : data.rawJson,
         rawHtmlStorageUrl: data.rawHtmlStorageUrl,
       },
+    });
+  }
+
+  async createPriceCheckRun(
+    data: Omit<PriceCheckRunRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunRecord> {
+    return this.prisma.priceCheckRun.create({ data });
+  }
+
+  async updatePriceCheckRun(
+    id: string,
+    data: Partial<PriceCheckRunRecord>,
+  ): Promise<PriceCheckRunRecord | null> {
+    try {
+      return await this.prisma.priceCheckRun.update({
+        where: { id },
+        data: withoutUndefined({
+          startedAt: data.startedAt,
+          finishedAt: data.finishedAt,
+          status: data.status,
+          watchItemsScanned: data.watchItemsScanned,
+          sourcesSelected: data.sourcesSelected,
+          sourcesSucceeded: data.sourcesSucceeded,
+          sourcesFailed: data.sourcesFailed,
+          sourcesNeedsReview: data.sourcesNeedsReview,
+        }),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async listPriceCheckRuns(filters?: {
+    limit?: number;
+    status?: PriceCheckRunStatus;
+  }): Promise<PriceCheckRunRecord[]> {
+    return this.prisma.priceCheckRun.findMany({
+      where: { status: filters?.status },
+      orderBy: { startedAt: "desc" },
+      take: filters?.limit ?? 20,
+    });
+  }
+
+  async getPriceCheckRun(id: string): Promise<PriceCheckRunRecord | null> {
+    return this.prisma.priceCheckRun.findUnique({ where: { id } });
+  }
+
+  async createPriceCheckRunResult(
+    data: Omit<PriceCheckRunResultRecord, "id" | "createdAt">,
+  ): Promise<PriceCheckRunResultRecord> {
+    return this.prisma.priceCheckRunResult.create({ data });
+  }
+
+  async listPriceCheckRunResults(
+    priceCheckRunId?: string,
+  ): Promise<PriceCheckRunResultRecord[]> {
+    return this.prisma.priceCheckRunResult.findMany({
+      where: { priceCheckRunId },
+      orderBy: { createdAt: "desc" },
     });
   }
 

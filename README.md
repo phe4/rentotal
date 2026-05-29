@@ -94,6 +94,43 @@ If you need to provide `DATABASE_URL` inline in PowerShell:
 $env:DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/rentotal"; npx prisma validate
 ```
 
+## Local Price Check Runner
+
+Run the one-shot price check runner:
+
+```bash
+npm run price-check:run
+```
+
+Safe default controls:
+
+- `cooldownMinutes`: `360`
+- `dryRun`: `false`
+- `force`: `false`
+- `maxSources`: unset
+
+Examples:
+
+```bash
+npm run price-check:run -- --dry-run
+npm run price-check:run -- --cooldown-minutes 360 --max-sources 50
+npm run price-check:run -- --force
+```
+
+Windows Task Scheduler example:
+
+```text
+Program: npm.cmd
+Arguments: run price-check:run -- --cooldown-minutes 360 --max-sources 50
+Start in: <project directory>
+```
+
+cron example:
+
+```bash
+0 */6 * * * cd /path/to/project && npm run price-check:run -- --cooldown-minutes 360 --max-sources 50
+```
+
 ## Playwright Note
 
 Browser fallback exists for local dynamic-page scraping, but API tests mock browser collector behavior and do not launch a real browser.
@@ -114,9 +151,12 @@ Browser fallback uses conservative timing settings:
 - Properties: create, list, get, update, delete properties.
 - Property sources: attach external source URLs and metadata to properties.
 - Watch lists/items: manually track properties, URLs, budgets, move-in targets, and notes.
+- Price check runner: manually trigger run-all price checks with `POST /api/price-check/run-all`, including dry-run, cooldown, force, and max-source controls. Inspect run history with `GET /api/price-check/runs`, and review watch list health with `GET /api/price-check/health`.
 - Scrape tasks/runs: create scrape tasks, run them, and inspect scrape run records.
 - Price snapshots/history/latest price: store historical snapshots and read latest or chronological price data.
 - Alerts: list stored alerts and mark alerts as read.
+
+Use the one-shot local CLI runner for cron-friendly price checks.
 
 ## Scraping Pipeline
 

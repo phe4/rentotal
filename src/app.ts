@@ -2,16 +2,21 @@ import cors from "cors";
 import express from "express";
 import type { Repository } from "./types.js";
 import { alertsRouter } from "./routes/alerts.js";
+import { priceCheckRouter } from "./routes/priceCheck.js";
 import { propertiesRouter } from "./routes/properties.js";
 import { scrapingRouter } from "./routes/scraping.js";
 import { watchIntakesRouter } from "./routes/watchIntakes.js";
 import { watchItemsRouter } from "./routes/watchItems.js";
 import { watchListsRouter } from "./routes/watchLists.js";
 import type { ScrapeServiceOptions } from "./services/scrapeService.js";
+import type { ScheduledPriceCheckServiceOptions } from "./services/scheduledPriceCheckService.js";
 
 export function createApp(
   repository: Repository,
-  options: { scrapeService?: ScrapeServiceOptions } = {},
+  options: {
+    scrapeService?: ScrapeServiceOptions;
+    priceCheck?: ScheduledPriceCheckServiceOptions;
+  } = {},
 ) {
   const app = express();
 
@@ -25,6 +30,12 @@ export function createApp(
   const api = express.Router();
   api.use(propertiesRouter(repository));
   api.use(scrapingRouter(repository, options.scrapeService));
+  api.use(
+    priceCheckRouter(repository, {
+      scrapeService: options.scrapeService,
+      ...options.priceCheck,
+    }),
+  );
   api.use(watchListsRouter(repository));
   api.use(watchItemsRouter(repository));
   api.use(watchIntakesRouter(repository));

@@ -90,6 +90,12 @@ enum ScrapeRunStatus {
   PARTIAL
 }
 
+enum PriceCheckRunStatus {
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
 enum AlertType {
   PRICE_DROPPED
   PRICE_INCREASED
@@ -309,6 +315,41 @@ model RawPage {
   @@index([propertyId])
   @@index([sourceId])
   @@index([contentHash])
+}
+
+model PriceCheckRun {
+  id                 String                @id @default(cuid())
+  startedAt          DateTime
+  finishedAt         DateTime?
+  status             PriceCheckRunStatus
+  watchItemsScanned  Int
+  sourcesSelected    Int
+  sourcesSucceeded   Int
+  sourcesFailed      Int
+  sourcesNeedsReview Int
+  createdAt          DateTime              @default(now())
+  results            PriceCheckRunResult[]
+
+  @@index([status, startedAt])
+  @@index([createdAt])
+}
+
+model PriceCheckRunResult {
+  id              String        @id @default(cuid())
+  priceCheckRunId String
+  propertyId      String?
+  sourceId        String?
+  scrapeRunId     String?
+  status          String
+  crawlerTier     String?
+  itemsFound      Int?
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+  priceCheckRun   PriceCheckRun @relation(fields: [priceCheckRunId], references: [id], onDelete: Cascade)
+
+  @@index([priceCheckRunId])
+  @@index([sourceId])
+  @@index([scrapeRunId])
 }
 
 model Alert {

@@ -13,6 +13,7 @@
     "profile:approve": "tsx src/scripts/approveProfile.ts",
     "profile:generate-draft": "tsx src/scripts/generateProfileDraft.ts",
     "profile:validate": "tsx src/scripts/validateProfiles.ts",
+    "price-check:run": "tsx src/scripts/runPriceCheck.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
