@@ -1,0 +1,188 @@
+:root {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.4;
+  color: #1f2937;
+  background: #f5f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.page-header p {
+  margin-top: 4px;
+  color: #6b7280;
+}
+
+.panel {
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+input[type="text"],
+input:not([type]) {
+  width: 100%;
+}
+
+input {
+  border: 1px solid #9ca3af;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 14px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid #1f2937;
+  border-radius: 6px;
+  background: #1f2937;
+  color: white;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.stat-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px;
+  display: grid;
+}
+
+.stat-label {
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  padding: 8px;
+  white-space: nowrap;
+}
+
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr.selected {
+  background: #eff6ff;
+}
+
+.run-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.muted {
+  color: #6b7280;
+}
+
+.error {
+  border-color: #b91c1c;
+  color: #991b1b;
+}
+
+.section-error {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 6px;
+  color: #991b1b;
+  padding: 10px;
+}
+
+.section-error p {
+  margin: 0;
+}
+
+.section-error .error-detail,
+.error-detail {
+  margin-top: 4px;
+  color: #7f1d1d;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-grid p {
+  margin: 0;
+}
+
+.detail-grid h3 {
+  margin-top: 8px;
+  margin-bottom: 6px;
+}

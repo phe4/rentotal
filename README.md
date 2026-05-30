@@ -16,7 +16,8 @@ Completed phases:
 
 Current preparation:
 
-- Phase 7F Watch Items Tracking Overview API: list-level read-only tracking cards for future dashboard use, building on the Phase 7E per-watch-item summary endpoint.
+- Phase 7G Minimal Admin Dashboard Frontend: implemented as a minimal local Vite + React + TypeScript dashboard using existing backend APIs.
+- Phase 7H Frontend Hardening and API Client Cleanup: implemented as a maintainability-focused cleanup pass with a small typed API client, clearer dashboard error handling, and cleaner frontend structure.
 
 ## Not Implemented Yet
 
@@ -28,7 +29,7 @@ These features are intentionally out of scope for the current implementation:
 - embeddings or pgvector
 - reviews/social/forum crawling
 - scoring or recommendations
-- frontend
+- public or complex frontend
 - authentication
 - payments or notification delivery
 
@@ -65,6 +66,34 @@ npm run dev
 ```
 
 The API starts from `src/server.ts` and mounts routes under `/api`.
+
+Install frontend dependencies:
+
+```bash
+npm --prefix frontend install
+```
+
+Start the frontend dashboard:
+
+```bash
+npm run frontend:dev
+```
+
+Build the frontend dashboard:
+
+```bash
+npm run frontend:build
+```
+
+The admin dashboard runs on Vite's default local URL (typically `http://localhost:5173`) and calls the backend API at `http://localhost:3000` by default during local development. No Vite proxy is configured; set `VITE_API_BASE_URL` when the backend uses a different origin. In non-Vite local setups, the frontend falls back to same-origin when `VITE_API_BASE_URL` is not set.
+
+Optional override:
+
+```bash
+# PowerShell
+$env:VITE_API_BASE_URL="http://localhost:3000"
+npm run frontend:dev
+```
 
 ## Test And Validation
 
@@ -162,6 +191,39 @@ Browser fallback uses conservative timing settings:
 
 Use the one-shot local CLI runner for cron-friendly price checks.
 
+## Admin Dashboard (Phase 7G)
+
+The minimal local admin dashboard is under `frontend/`.
+
+Current dashboard coverage:
+
+- health summary panel (`GET /api/price-check/health`)
+- watch items overview table (`GET /api/watch-items/tracking-summary`)
+- recent run history panel (`GET /api/price-check/runs`)
+- run controls (`POST /api/price-check/run-all`) with:
+  - `dryRun`
+  - `cooldownMinutes`
+  - `maxSources`
+  - `force`
+- per-watch-item tracking detail (`GET /api/watch-items/:id/tracking-summary`)
+- loading, empty, and error states with retry buttons
+
+No authentication, maps, AI features, or new scraping behavior is added in this phase.
+
+### Manual Dashboard Test Steps
+
+Because this repo did not previously have frontend test setup, Phase 7G and Phase 7H use manual dashboard checks. Keep the frontend and backend running separately, and set `VITE_API_BASE_URL` if the backend is not available at `http://localhost:3000`:
+
+1. Start backend: `npm run dev`
+2. Start frontend: `npm run frontend:dev`
+3. Open the Vite URL in browser (usually `http://localhost:5173`).
+4. Confirm health summary loads.
+5. Confirm watch item overview loads (or empty state appears).
+6. Click `Run Price Check` and verify recent runs and health refresh.
+7. Click `Dry Run` and verify run executes without scraper execution side effects.
+8. Click a watch item row and verify detail panel fetches and renders.
+9. Force a backend/API error (for example stop backend) and confirm error state and retry behavior.
+
 ## Scraping Pipeline
 
 The scraper pipeline is intentionally conservative:
@@ -195,7 +257,7 @@ The overview response includes `generatedAt`, `total`, `limit`, `offset`, and `i
 ## Future Phases
 
 - Phase 6: domain-specific parsers for common apartment platforms.
-- Phase 7: Google Places and map discovery.
+- Phase 7: Google Places and map discovery after the Phase 7A-7H price-check and dashboard work.
 - Phase 8: reviews, social, and forum data.
 - Phase 9: AI, pgvector, semantic search, and agent research.
 - Phase 10: scoring and recommendations.

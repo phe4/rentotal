@@ -8,7 +8,7 @@ The long-term goal is to build an AI-powered apartment research assistant, but t
 
 ## Current Phase
 
-Current phase: Phase 7F - Watch Items Tracking Overview API.
+Current phase: Phase 7H - Frontend Hardening and API Client Cleanup.
 
 Build only:
 

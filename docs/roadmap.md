@@ -259,6 +259,20 @@ Add a lightweight list-level tracking overview endpoint that returns dashboard-r
 
 Complete.
 
+## Phase 7G: Minimal Admin Dashboard Frontend
+
+Goal:
+Add a minimal local admin dashboard frontend that uses the existing backend APIs to make the tracking system visible and usable.
+
+Complete.
+
+## Phase 7H: Frontend Hardening and API Client Cleanup
+
+Goal:
+Clean up the minimal dashboard foundation so future UI work can build on it safely.
+
+Complete.
+
 ## Phase 6I: Yardi Draft Profile From Sample Data
 
 Goal:
